@@ -107,7 +107,7 @@ Set the `PORT` value in config. That's all.
 | Solver | Solve Request | Solve a turnstile widget request that is delivered to a solver. Structure: <...solver_idx_bytes (u32), ...requester_id_bytes (u32), ...(field_name_len (u8), ...field_name_bytes, field_value_len (u8), ...field_value_bytes)>. |
 | Your Backend | Available Solvers Result | The result to the available solvers count request you made. Structure: <...available_solvers_bytes (u32)>. | 
 
-*Note that the clientbound packets do not have headers since each endpoint recieves few, easily disceranble packets. Recievers recieve a packet of only length 1 (Solvers Unavailable), or the token packet itself. The solver can only recieve a solve request.*
+*Note that the clientbound packets do not have headers since each endpoint recieves few, easily disceranble packets. Recievers recieve a packet of only length 1 (Solvers Unavailable), or the token packet itself. The solver can only recieve a solve request, and the backend can only recieve an availale solvers count result.*
 
 ---
 
