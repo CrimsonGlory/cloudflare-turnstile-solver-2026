@@ -131,6 +131,28 @@ As previously mentioned first of all, you'll need FireFox. The architecture for 
 
 ---
 
+## Bypassing WebRTC
+
+WebRTC can leak your real IP. To solve this issue, there three solutions you can use:
+
+1. Disable WebRTC features in your FireFox config. In `about:config`, set `media.peerconnection.ice.nohost`, `media.peerconnection.ice.default_address_only`, `media.peerconnection.ice.proxy_only_if_behind_proxy`, and `media.peerconnection.ice.obfuscate_host_addresses` to `true`. These stop WebRTC from peeking at any host candidates and accidently leaking your real IP, but STILL leave WebRTC enabled, which can help minimize bot risk.
+2. If you want to fully disable WebRTC (may increase bot risk), you can alternatively set `media.peerconnection.enabled` to `false`.
+3. Simply download any FireFox anti WebRTC extension (there are many anti WebRTC extensions that exist).
+
+---
+
+## Notes on Fingerprinting
+
+As heavily mentioned before, this method relies on the usage of a legitimate browser (Firefox) to solve turnstile widgets.
+
+While this does help make the browser come off as legitimate to Cloudflare, there are some drawbacks--namely the failure to spoofing fingerprinting metrics.
+
+UserAgent, TLS/JA4, canvas, navigator & hardware fingerprinting metrics are currently all not custom-spoofed by this project.
+
+But, to note, FireFox has **MANY** settings you can set in `about:config` to your liking to minimize fingerprint damage. Additionally, you can change the strictness of tracking protection in `about:preferences#privacy`. Be careful, though. Some settings may cause Cloudflare to flag your session. It's best you experiment with what works, and what doesn't. I may provide more documentation on this later. Also note, since a real, standard browser is used that greatly helps. It still can get many solves. That said, there is currently no custom fingerprint spoofing mechanism in this system though.
+
+---
+
 ## Starting It Up
 
 1. Start the **token server**.
@@ -216,27 +238,6 @@ if (packet.byteLength > 4) {
    // Solvers Unavailable
 }
 ```
----
-
-## Bypassing WebRTC
-
-WebRTC can leak your real IP. To solve this issue, there three solutions you can use:
-
-1. Disable WebRTC features in your FireFox config. In `about:config`, set `media.peerconnection.ice.nohost`, `media.peerconnection.ice.default_address_only`, `media.peerconnection.ice.proxy_only_if_behind_proxy`, and `media.peerconnection.ice.obfuscate_host_addresses` to `true`. These stop WebRTC from peeking at any host candidates and accidently leaking your real IP, but STILL leave WebRTC enabled, which can help minimize bot risk.
-2. If you want to fully disable WebRTC (may increase bot risk), you can alternatively set `media.peerconnection.enabled` to `false`.
-3. Simply download any FireFox anti WebRTC extension (there are many anti WebRTC extensions that exist).
-
----
-
-## Notes on Fingerprinting
-
-As heavily mentioned before, this method relies on the usage of a legitimate browser (Firefox) to solve turnstile widgets.
-
-While this does help make the browser come off as legitimate to Cloudflare, there are some drawbacks--namely the failure to spoofing fingerprinting metrics.
-
-UserAgent, TLS/JA4, canvas, navigator & hardware fingerprinting metrics are currently all not custom-spoofed by this project.
-
-But, to note, FireFox has **MANY** settings you can set in `about:config` to your liking to minimize fingerprint damage. Additionally, you can change the strictness of tracking protection in `about:preferences#privacy`. That said, there is currently no custom fingerprint spoofing mechanism in this system though.
 
 ---
 
