@@ -28,8 +28,8 @@ A proof-of-concept Cloudflare Turnstile bypass system built in Rust. Includes a 
 | The solver is **not headless** — a GUI is required. |
 | Ineffective for general, random web-scraping. Knowing the websites it will be used on is most effective. |
 | **Requires Firefox for multi-proxy solving. If you want to use a singular IP, then any browser that supports overrides works.** |
-| Multi user-agent rotation currently not supported (detected). This is related to the next point too. See section: Notes on Fingerprinting. |
-| No custom fingerprint spoofing (TLS/JA4, canvas). BUT, FireFox itself has settings to resist fingerprinting. See section: Notes on Fingerprinting. |
+| Multi user-agent rotation currently not supported (detected). This is related to the next point too. See section: Extra Notes on Fingerprinting. |
+| No custom fingerprint spoofing (TLS/JA4, canvas). BUT, FireFox itself has settings to resist fingerprinting. See section: Extra Notes on Fingerprinting. |
 
 | Minor |
 | :--- |
@@ -216,6 +216,17 @@ if (packet.byteLength > 4) {
    // Solvers Unavailable
 }
 ```
+---
+
+### Bypassing WebRTC
+
+WebRTC can leak your real IP. To solve this issue, there three solutions you can use:
+
+1. Disable WebRTC features in your FireFox config. In `about:config`, set `media.peerconnection.ice.nohost`, `media.peerconnection.ice.default_address_only`, `media.peerconnection.ice.proxy_only_if_behind_proxy`, and `media.peerconnection.ice.obfuscate_host_addresses` to `true`. These stop WebRTC from peeking at any host candidates and accidently leaking your real IP, but STILL leave WebRTC enabled, which can help minimize bot risk.
+2. If you want to fully disable WebRTC (may increase bot risk), you can alternatively set `media.peerconnection.enabled` to `false`.
+3. Simply download any FireFox anti WebRTC extension (there are many anti WebRTC extensions that exist).
+
+---
 
 ### Notes on Fingerprinting
 
@@ -223,13 +234,11 @@ As heavily mentioned before, this method relies on the usage of a legitimate bro
 
 While this does help make the browser come off as legitimate to Cloudflare, there are some drawbacks--namely the failure to spoofing fingerprinting metrics.
 
-UserAgent, TLS/JA4, canvas, navigator & hardware fingerprinting metrics are currently all fixed. 
+UserAgent, TLS/JA4, canvas, navigator & hardware fingerprinting metrics are currently all not custom-spoofed by this project.
 
-Hardware specs can determine canvas fingerprint output. So if you spoof java hardware spec values, but don't spoof the canvas fingerprint to match those adjusted specs, this can greatly increase Cloudflare's perceived risk of your instance.
+But, to note, FireFox has **MANY** settings you can set in `about:config` to your liking to minimize fingerprint damage. Additionally, you can change the strictness of tracking protection in `about:preferences#privacy`. That said, there is currently no custom fingerprint spoofing mechanism in this system though.
 
-Your browser affects both your TLS handshake/JA4 fingerprint and your canvas fingerprint, meaning modifying your user agent could flat out make you fail verification. This contrasts with just modifying canvas fingerprinting, which will only increase perceived risk as many browsers (including FireFox) have the option to spoof/resist canvas fingerprinting.
-
-Fortunately, as was just mentioned, FireFox has built in settings to resist fingerprinting across various critical metrics. You can configure settings in `about:config`, or use FireFox's `UserFile` feature. FireFox has many built in settings to counter fingerpinting, such as disabling metrics like webGL (critical for canvas/hardware fingerprinting), disable webRTC local IP leaks, encrypt and block analytics data, etc. 
+---
 
 ## Future Plans/What this Needs (may not be done, but if major updates do occur to this project it will likely be these).
 
