@@ -141,7 +141,7 @@ You will need a reference to a proxies txt list. This list should match the one 
 
 For any turnstile render call custom fields, such as "cData" or "action" as previously mentioned, you'll need to figure out how they are generated for your target, and recreate the logic to how these fields are generated so that you can pass them into your solve request packet. "action" is usually a hardcoded string, but "cData" is often used as an individual ID/verification field. In short, ensure all fields of the turnstile render call match.
 
-Construct solve request packet:
+**Construct solve request packet:**
 
 ```
 // proxy_idx = literally just the index of your proxy in the proxy list.
@@ -169,7 +169,7 @@ function construct_solver_request_packet(proxy_idx, fields = {}) {
 };
 ```
 
-Parse token response packet:
+**Parse token response packet:**
 
 ```
 // packet = packet buffer.
@@ -185,7 +185,7 @@ function parse_token_response_packet(packet) {
 };
 ```
 
-Parse available solvers packet:
+**Parse available solvers packet:**
 
 ```
 // packet = packet buffer.
@@ -195,7 +195,7 @@ function parse_available_solvers_count_packet(packet) {
 };
 ```
 
-Match packets:
+**Match packets:**
 
 ```
 // packet = packet buffer
