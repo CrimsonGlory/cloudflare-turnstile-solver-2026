@@ -1,4 +1,4 @@
-# rust-cf-turnstile-bypass
+# rust-cf-turnstile-solver
 
 A proof-of-concept Cloudflare Turnstile bypass system built in Rust. Includes a token harvesting mechanism comprising a widget generator, a proxy managing extension, a Turnstile checkbox clicker, and a token server for receiving and managing solved tokens. No API service required. 
 
