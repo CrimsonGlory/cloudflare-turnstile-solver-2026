@@ -247,6 +247,8 @@ Custom navigator, webgl debug renderer, and window dimensions spoofing.
 
 As previously mentioned, 2026 CF has really amped up their user-agent spoof detection. They now match user-agent reported browser data to even the TLS handshakes you exhibit. A bypass for this is useful, but will also require in depth fingerprint bypassing from both TLS/JA4 and canvas. Due to such complexity it has not yet been added. 
 
+**To deal with this, I might just make this system work with multiple different browsers, and make a proxy extension different browser protocols. This way, I can get custom user-agents and ja4 fingerprints without actually making a custom browser to emit all of them. As for hardware specs and canvas fingerprinting, a custom solution to spoof hardware specs can be easy to make, as that particularly involves modifying navigator and webgl debug renderer properties. Canvas fingerprinting can be edited to match these with some care, however canvas fingerprinting is also not a major risk assessment flag as many browsers as previously stated have features to spoof or implement noise onto these.** 
+
 An automatic page-loader and harvester setup script may be created in order to aid with multi-proxy solving, as per page loads are currently needed for such.
 
 If a feasible solution is found, a way to tunnel individual iframes (hence enhancing multi-proxy solving outside of just different tabs) may be implemented.
