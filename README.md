@@ -179,6 +179,26 @@ function parse_token_response_packet(packet) {
     }
     return [solver_idx, token];
 };
+
+```
+// packet = packet buffer.
+function parse_token_response_packet(packet) {
+    let view = new DataView(packet);
+    return [view.getUint32(0, true)];
+};
+```
+
+```
+// packet = packet buffer
+if (packet.byteLength > 4) {
+   // Token Packet
+} else if (packet.byteLength == 4) {
+   // Available Solvers Result
+} else {
+   // Solvers Unavailable
+}
+```
+
 ```
 
 ## Future Plans (may not be done, but if major updates do occur to this project it will likely be these).
