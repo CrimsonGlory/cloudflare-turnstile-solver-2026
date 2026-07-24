@@ -139,7 +139,7 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<State>>) {
                 } else {
                     // Indicate that this solver request couldn't go through.
                     // [0]
-                     let _ = tx.send(Message::binary(vec![0]));
+                    let _ = tx.send(Message::binary(vec![0]));
                     println!("[-] No solvers available in the queue to handle request from {}.", id);
                 }
             }
@@ -150,6 +150,15 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<State>>) {
                 let mut s = state.lock().await;
                 s.available_solvers_queue.insert(id);
                 println!("[+] Solver {} added to queue. Total available: {}.", id, s.available_solvers_queue.len());
+            }
+
+            // Request to recieve all currently available solvers. Useful for checking how many solver instances you can spawn.
+            // [3]
+            3 => {
+                let s = state.lock().await;
+                let available_solvers_count = s.available_solvers_queue.len() as u32;
+                // [...available_solvers_count_bytes]
+                let _ = tx.send(Message::Binary(available_solvers_count.to_le_bytes().to_vec()));
             }
 
             _ => {
