@@ -218,7 +218,7 @@ if (packet.byteLength > 4) {
 ```
 ---
 
-### Bypassing WebRTC
+## Bypassing WebRTC
 
 WebRTC can leak your real IP. To solve this issue, there three solutions you can use:
 
@@ -228,7 +228,7 @@ WebRTC can leak your real IP. To solve this issue, there three solutions you can
 
 ---
 
-### Notes on Fingerprinting
+## Notes on Fingerprinting
 
 As heavily mentioned before, this method relies on the usage of a legitimate browser (Firefox) to solve turnstile widgets.
 
