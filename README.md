@@ -28,7 +28,8 @@ A proof-of-concept Cloudflare Turnstile bypass system built in Rust. Includes a 
 | The solver is **not headless** — a GUI is required. |
 | Ineffective for general, random web-scraping. Knowing the websites it will be used on is most effective. |
 | **Requires Firefox for multi-proxy solving. If you want to use a singular IP, then any browser that supports overrides works.** |
-| Multi user-agent rotation currently not supported (detected). |
+| Multi user-agent rotation currently not supported (detected). This is related to the next point too. See section: Notes on Fingerprinting. |
+| No custom fingerprint spoofing (TLS/JA4, canvas). BUT, FireFox itself has settings to resist fingerprinting. See section: Notes on Fingerprinting. |
 
 | Minor |
 | :--- |
@@ -45,7 +46,7 @@ The bypass is comprised of four main components:
 1. **Token Harvester / Turnstile Widget Loader**
 2. **Turnstile Widget Identifier & Clicker**
 3. **Token Server**
-4. **Extensions**
+4. **Proxy Extension**
 
 ---
 
@@ -122,14 +123,11 @@ Set the `PORT` value in config. That's all.
 
 ---
 
-### 4. Extensions
+### 4. Proxy Extension
 
-Extensions allow us to utilize our browser's full API capability to connect proxies and spoof user-agents (currently detected, so do not use uas), plus block WebRTC.
+The extension allow us to utilize FireFox's API capability to connect to proxies, per tab.
 
-You'll need two key extensions.
-
-1. As previously mentioned first of all, you'll need FireFox. The architecture for connecting to proxies was designed with FireFox's API, especially since it allows per-window proxy connections. You'll need to install the `firefox-proxy-extension` attached in this repository, as this provides the API necessary for asynchronous proxy connections, allowing you to await and connect to a proxy before continuing execution. Additionally, this extension also spoofs the user-agent field of each solver request, which is also done according to the solver_idx just like the proxy is, so that your proxy can match your custom user-agent.
-2. A WebRTC API spoofer or blocker. WebRTC can leak your real IP if not careful, so getting a good extension to block this is critical. You can just look one up online, there are plenty.
+As previously mentioned first of all, you'll need FireFox. The architecture for connecting to proxies was designed with FireFox's API, especially since it allows per-window proxy connections. You'll need to install the `firefox-proxy-extension` attached in this repository, as this provides the API necessary for asynchronous proxy connections, allowing you to await and connect to a proxy before continuing execution. 
 
 ---
 
@@ -219,8 +217,25 @@ if (packet.byteLength > 4) {
 }
 ```
 
-## Future Plans (may not be done, but if major updates do occur to this project it will likely be these).
-As previously mentioned, 2026 CF has really amped up their user-agent spoof detection. They now match user-agent reported browser data to even the TLS handshakes you exhibit. A bypass for this is top priority.
+### Notes on Fingerprinting
+
+As heavily mentioned before, this method relies on the usage of a legitimate browser (Firefox) to solve turnstile widgets.
+
+While this does help make the browser come off as legitimate to Cloudflare, there are some drawbacks--namely the failure to spoofing fingerprinting metrics.
+
+UserAgent, TLS/JA4, canvas, navigator & hardware fingerprinting metrics are currently all fixed. 
+
+Hardware specs can determine canvas fingerprint output. So if you spoof java hardware spec values, but don't spoof the canvas fingerprint to match those adjusted specs, this can greatly increase Cloudflare's perceived risk of your instance.
+
+Your browser affects both your TLS handshake/JA4 fingerprint and your canvas fingerprint, meaning modifying your user agent could flat out make you fail verification. This contrasts with just modifying canvas fingerprinting, which will only increase perceived risk as many browsers (including FireFox) have the option to spoof/resist canvas fingerprinting.
+
+Fortunately, as was just mentioned, FireFox has built in settings to resist fingerprinting across various critical metrics. You can configure settings in `about:config`, or use FireFox's `UserFile` feature. FireFox has many built in settings to counter fingerpinting, such as disabling metrics like webGL (critical for canvas/hardware fingerprinting), disable webRTC local IP leaks, encrypt and block analytics data, etc. 
+
+## Future Plans/What this Needs (may not be done, but if major updates do occur to this project it will likely be these).
+
+Custom navigator, webgl debug renderer, and window dimensions spoofing.
+
+As previously mentioned, 2026 CF has really amped up their user-agent spoof detection. They now match user-agent reported browser data to even the TLS handshakes you exhibit. A bypass for this is useful, but will also require in depth fingerprint bypassing from both TLS/JA4 and canvas. Due to such complexity it has not yet been added. 
 
 An automatic page-loader and harvester setup script may be created in order to aid with multi-proxy solving, as per page loads are currently needed for such.
 
