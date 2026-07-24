@@ -29,7 +29,7 @@ A proof-of-concept Cloudflare Turnstile bypass system built in Rust. Includes a 
 | Ineffective for general, random web-scraping. Knowing the websites it will be used on is most effective. |
 | **Requires Firefox for multi-proxy solving. If you want to use a singular IP, then any browser that supports overrides works.** |
 | Multi user-agent rotation currently not supported (detected). This is related to the next point too. See section: Extra Notes on Fingerprinting. |
-| No custom fingerprint spoofing (TLS/JA4, canvas). BUT, FireFox itself has settings to resist fingerprinting. See section: Extra Notes on Fingerprinting. |
+| No custom fingerprint spoofing for TLS/JA4 and canvas. BUT, FireFox itself has settings to resist fingerprinting. See section: Extra Notes on Fingerprinting. |
 
 | Minor |
 | :--- |
