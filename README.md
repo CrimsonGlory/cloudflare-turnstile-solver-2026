@@ -92,7 +92,7 @@ Set the `PORT` value in config. That's all.
 *Serverbound (client -> server):*
 
 | Sent From | Header | Description |
-|--------|-------------|
+|-----------|--------|-------------|
 | Solver | `0` | Incoming token result from a solver. The server routes it back to the specific requester who asked for it by extracting the requester id, then re-adds the solver to the available queue. Structure: <0, ...requester_id_bytes (u32), ...solver_idx_bytes (u32), ...token_bytes>. If the solver failed to get a token, then there are no token bytes. |
 | Reciever/Requester | `1` | On-demand solve request from a requester. The server pulls the next available solver from the queue and forwards this assignment to them. Also note, the "render" function call for turnstile, which initializes the widget, can take in special fields and extra data, such as "action", or "cdata". To counter this, you may also specify field data for these in this packet, as shown in the provided structure. These fields will then be passed into the render call the solver makes. Structure: <1, ...solver_idx_bytes (u32), ...(field_name_len (u8), ...field_name_bytes, field_value_len (u8), ...field_value_bytes)>. |
 | Solver | `2` | Register the sending socket as a solver. The server appends its socket id to the available solvers queue. Structure: <2>. |
