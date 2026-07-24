@@ -4,26 +4,37 @@ A proof-of-concept Cloudflare Turnstile bypass system built in Rust. Includes a 
 
 ---
 
-# Pros
+### Pros
 
-- No API service is required.
-- Solver can effectively generate many tokens per minute, even without the use of an API service. 
-- Data is handled and already managed by a server that makes managing your haverested tokens easy.
-- Method is generally effective when you know the website you want to apply it to beforehand.
-- The method is relatively firm and not as easy to patch as other bypasses, as it relies on overriding pages to avoid any policies like CORs or any fingerprinting, and the checkbox identifier will work as long as Cloudflare does not drastically change the UI of the widget itself.
-- Easy to use and setup, especially compared to certain other bypasses.
-- This method has a far higher success rate than any standard method (near perfect, if not perfect).
-- Because this method uses standard Mozilla Firefox, the entire solving process comes off as legitimate to Cloudflare.
+| Major |
+| :--- |
+| No API service is required. This is completely free of charge to use. |
+| Solver can quickly generate tokens. |
+| The method is relatively firm and not as easy to patch as other bypasses, as it relies on overriding pages to avoid any policies like CORs or any fingerprinting, and the checkbox identifier will work as long as Cloudflare does not drastically change the UI of the widget itself. |
+| This method has a far higher success rate than many other methods. |
+| Because this method uses standard Mozilla Firefox, the entire solving process comes off as legitimate to Cloudflare. |
+| Great for building headless applications. Even though the solver itself needs GUI, once the token is solved for you can do everything headlessly. |
 
-## Caveats
+| Minor |
+| :--- |
+| Data is handled and already managed by a server that makes managing your haverested tokens easy. |
+| Method is generally effective when you know the website you want to apply it to beforehand. |
+| Easy to use and setup, especially compared to certain other bypasses. |
 
-- The solver is **not headless** — a GUI is required.
-- The method relies on a browser with overrides enabled.
-- Tunneling multiple proxies through each iframe is not supported. Do note this may potentially be added in the future if a feasible solution (some form of advanced tunneling) is found. Note that per-window proxying, however, is supported.
-- Designed for smaller-scale token harvesting, though the token server architecture does support larger-scale operations.
-- Ineffective for general, random web-scraping. Knowing the websites it will be used on is most effective.
-- Multi user-agent rotation currently not supported (detected).
-- **Requires Firefox for multi-proxy solving. If you want to use a singular IP, then any browser that supports overrides works.**
+### Caveats
+
+| Major |
+| :--- |
+| The solver is **not headless** — a GUI is required. |
+| Ineffective for general, random web-scraping. Knowing the websites it will be used on is most effective. |
+| **Requires Firefox for multi-proxy solving. If you want to use a singular IP, then any browser that supports overrides works.** |
+| Multi user-agent rotation currently not supported (detected). |
+
+| Minor |
+| :--- |
+| The method relies on a browser with overrides enabled. |
+| Designed for smaller-scale token harvesting, though the token server architecture does support larger-scale operations. |
+| Tunneling multiple proxies through each iframe is not supported. Do note this may potentially be added in the future if a feasible solution (some form of advanced tunneling) is found. Note that per-window proxying, however, is supported. |
 
 ---
 
