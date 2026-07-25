@@ -12,7 +12,7 @@ A proof-of-concept Cloudflare Turnstile bypass system built in Rust. Includes a 
 | Solver can quickly generate tokens. |
 | The method is relatively firm and not as easy to patch as other bypasses, as it relies on overriding pages to avoid any policies like CORs or any fingerprinting, and the checkbox identifier will work as long as Cloudflare does not drastically change the UI of the widget itself. |
 | This method has a far higher success rate than many other methods. |
-| Because this method uses standard Mozilla Firefox, the entire solving process comes off as legitimate to Cloudflare. |
+| Because this method uses standard web browsers, the entire solving process comes off as legitimate to Cloudflare. |
 | Great for building headless applications. Even though the solver itself needs GUI, once the token is solved for you can do everything headlessly. |
 
 | Minor |
@@ -27,15 +27,23 @@ A proof-of-concept Cloudflare Turnstile bypass system built in Rust. Includes a 
 | :--- |
 | The solver is **not headless** — a GUI is required. |
 | Ineffective for general, random web-scraping. Knowing the websites it will be used on is most effective. |
-| **Requires Firefox for multi-proxy solving. If you want to use a singular IP, then any browser that supports overrides works.** |
-| Multi user-agent rotation currently not supported (detected). This is related to the next point too. See section: Extra Notes on Fingerprinting. |
-| No custom fingerprint spoofing for TLS/JA4 and canvas. BUT, FireFox itself has settings to resist fingerprinting. See section: Extra Notes on Fingerprinting. |
+| No custom fingerprint spoofing for TLS/JA4, canvas, and other metrics like navigator values. But, given the legitimacy of the browsers, this isn't as severe as usual. |
 
 | Minor |
 | :--- |
 | The method relies on a browser with overrides enabled. |
 | Designed for smaller-scale token harvesting, though the token server architecture does support larger-scale operations. |
 | Tunneling multiple proxies through each iframe is not supported. Do note this may potentially be added in the future if a feasible solution (some form of advanced tunneling) is found. Note that per-window proxying, however, is supported. |
+
+---
+
+## Supported Browsers (as of now).
+
+To help create fingerprint variation, the goal of this system is to support multiple browsers (i.e. they have a proxy connector extension).
+
+Current browsers that are supported (as a note right now it's only FireFox, I plan to add support for CDP browsers very soon). 
+
+- FireFox. You can spawn as many pages as you want. Proxies are per tab, not linked to account.
 
 ---
 
@@ -52,7 +60,7 @@ The bypass is comprised of four main components:
 
 ### 1. Token Harvester / Turnstile Widget Loader
 
-The Token Harvester loads the Turnstile widget by spawning multiple iframe-based solvers, each pointing at a different Cloudflare site widget. Every solver iframe connects to the token server and forwards any solved tokens to it, and after forwarding a token it also resets the widget and begins solving for another token. Each window will also conect to its respective proxy from the proxy list upon recieving the idx for the proxy from the token server, plus also spoof the user-agent to its respective user-agent based on the recieved idx.
+The Token Harvester loads the Turnstile widget by spawning multiple iframe-based solvers, each pointing at a different Cloudflare site widget. Every solver iframe connects to the token server and forwards any solved tokens to it, which is done once it recieves an on demand request from your backend/recievers.
 
 **Setup:**
 
@@ -63,9 +71,7 @@ The Token Harvester loads the Turnstile widget by spawning multiple iframe-based
 
 2. **Set your proxies.**  Set your linesplit list of proxies to `localStorage.proxies`. The proxy extension will connect to a proxy from this list according to the recieved solver idx. Note the proxies list should include the protocol extension protocol://
 
-3. **Set your user-agents.**  Set your linesplit list of user-agents to `localStorage.user_agents`. The proxy extension will ensure requests per solve are spoofed to a user-agent based on the recieved solver idx. You do not need these, if you don't have enough the system will just keep the user-agent you already have, but for maximum anonymity purposes this is good. **NOTE: currently UAs are detected. Do not use this. User-agents are flagged even after modifying navigator properties and other basic fingerprinting metrics. Even the best user-agent switching extensions fail now. It appears as of 2026 Cloudflare has started matching TLS fingerprinting to UAs, making it difficult to work with. So do not set your user-agent list. This is just here in case a solution to this is presented, and also because this is a PoC and ideally a fully functional spoof would already exist. ALSO NOTE, since this method is already built to be used with legitimate, standard web browsers, this shouldn't pose much of an issue as you'll already be emitting an authentic user-agent.**
-
-4. **Apply as browser overrides.** Replace the target webpage's main HTML file with `index.html`. 
+3. **Apply as browser overrides.** Replace the target webpage's main HTML file with `index.html`. 
 
 **Why overrides?**
 
@@ -79,8 +85,7 @@ The Turnstile Clicker automatically solves checkbox click challenges. Run the re
 
 **Setup:**
 
-Set the config values described in `main.rs`. That's all, aside from installing dependencies.
-
+Set the config values described in `main.rs`. That's all.
 **How it works:**
 
 The clicker identifies Cloudflare Turnstile checkboxes by analyzing pixel RGB values. It searches for pixels matching the characteristic grey ring border of the Turnstile checkbox. Once a candidate pixel is found, it performs a depth-first search (DFS) to verify the pixel forms a closed ring/loop. It then searches inward from all four sides to isolate the whitespace within the border — the actual clickable area. Finally, it dispatches OS-level input events to move the mouse to a point within that region and click.
@@ -106,8 +111,8 @@ Set the `PORT` value in config. That's all.
 | Sent From | Header | Description |
 |-----------|--------|-------------|
 | Solver | `0` | Incoming token result from a solver. The server routes it back to the specific requester who asked for it by extracting the requester id, then re-adds the solver to the available queue. Structure: <0, ...requester_id_bytes (u32), ...solver_idx_bytes (u32), ...token_bytes>. If the solver failed to get a token, then there are no token bytes. |
-| Reciever | `1` | On-demand solve request from a requester. The server pulls the next available solver from the queue and forwards this assignment to them. Also note, the "render" function call for turnstile, which initializes the widget, can take in special fields and extra data, such as "action", or "cdata". To counter this, you may also specify field data for these in this packet, as shown in the provided structure. These fields will then be passed into the render call the solver makes. Structure: <1, ...solver_idx_bytes (u32), ...(field_name_len (u8), ...field_name_bytes, field_value_len (u8), ...field_value_bytes)>. |
-| Solver | `2` | Register the sending socket as a solver. The server appends its socket id to the available solvers queue. Structure: <2>. |
+| Reciever | `1` | On-demand solve request from a requester. The server pulls the next available solver from the queue and forwards this assignment to them. You can specify a specific user-agent in this packet, which will then make the token server force a solver with that user-agent. This is particularly useful for mimicing real web traffic, and distributing solves across an amount that mimics the real web traffic distribution of user-agents. You can also just leave user-agent as "" for a random selection. The `.render` function call for turnstile, which initializes the widget, can take in special fields and extra data, such as `action`, or `cData`. To counter this, you may also specify field data for these in this packet, as shown in the provided structure. These fields will then be passed into the render call the solver makes. Structure: <1, ...solver_idx_bytes (u32), user_agent_len (u8), ...user_agent_bytes ...(field_name_len (u8), ...field_name_bytes, field_value_len (u8), ...field_value_bytes)>. |
+| Solver | `2` | Register the sending socket as a solver. The server appends its socket id to the available solvers queue. Additionally, the solver sends its `navigator.userAgent` to the token server. A user-agent is referred to by the solver when making requests, which will force only a solver with the matching user-agent to solve the request. Structure: <2, ...user_agent_bytes>. |
 | Reciever | `3` | Request the total available solvers count. Good for analyzing how many active solving instances you can spawn. Structure: <3>. |
 
 *Clientbound (server -> client):*
@@ -117,17 +122,17 @@ Set the `PORT` value in config. That's all.
 | Reciever | Token | Incoming token delivered to a requester. Structure: <...solver_idx_bytes (u32), ...token_bytes>. If the solver failed to get a token, then there are no token bytes. |
 | Reciever | Solvers Unavailable | A request made by a solver could not be completed because no solvers were available to accept it. Structure: <0>. |
 | Solver | Solve Request | Solve a turnstile widget request that is delivered to a solver. Structure: <...solver_idx_bytes (u32), ...requester_id_bytes (u32), ...(field_name_len (u8), ...field_name_bytes, field_value_len (u8), ...field_value_bytes)>. |
-| Reciever | Available Solvers Result | The result to the available solvers count request you made. Structure: <...available_solvers_bytes (u32)>. | 
+| Reciever | Available Solvers Result | The result to the available solvers count request you made. Note, the zero at the end of this packet is dummy data. It is actually added because I made the accepted parsing system for these packets length based to check packet type, but the token packet will deliver 4 bytes if it fails to recieve a token. I added the extra byte to this packet to solve the length collision because no branching logic is required for this one, and its a much smaller and simpler case so I just prefered it. Structure: <...available_solvers_bytes (u32), 0>. | 
 
-*Note that the clientbound packets do not have headers since each endpoint recieves few, easily disceranble packets. Recievers recieve a packet of only length 1 (Solvers Unavailable), token packet itself, or a packet of length 4 (total available solvers). This makes discerning packets by length easy. The solver can only recieve a solve request.*
+*Note that the clientbound packets do not have headers since each endpoint recieves few, easily disceranble packets. Recievers recieve a packet of only length 1 (Solvers Unavailable), the token packet itself (can be length 4 if there is no token and the request failed), or a packet of length 5 (total available solvers). This makes discerning packets by length easy. The solver can only recieve a solve request.*
 
 ---
 
-### 4. Proxy Extension
+### 4. Proxy Extensions
 
-The extension allow us to utilize FireFox's API capability to connect to proxies, per tab.
+The extensions allow us to utilize browser proxy API capabilities to connect to proxies, per tab.
 
-As previously mentioned first of all, you'll need FireFox. The architecture for connecting to proxies was designed with FireFox's API, especially since it allows per-window proxy connections. You'll need to install the `firefox-proxy-extension` attached in this repository, as this provides the API necessary for asynchronous proxy connections, allowing you to await and connect to a proxy before continuing execution. 
+For each browser you'll be using, you'll need to add the respective extension for that browser from `proxy-extensions` to whatever browser you are using (ex. firefox for firefox, cdp for cdp browsers, truly a shocker), and run it. These extensions provide the API necessary for asynchronous proxy connections, allowing you to await and connect to a proxy before continuing execution. 
 
 ---
 
@@ -135,21 +140,9 @@ As previously mentioned first of all, you'll need FireFox. The architecture for 
 
 WebRTC can leak your real IP. To solve this issue, here three solutions you can use:
 
-1. Disable WebRTC features in your FireFox config. In `about:config`, set `media.peerconnection.ice.nohost`, `media.peerconnection.ice.default_address_only`, `media.peerconnection.ice.proxy_only_if_behind_proxy`, and `media.peerconnection.ice.obfuscate_host_addresses` to `true`. These stop WebRTC from peeking at any host candidates and accidently leaking your real IP, but STILL leave WebRTC enabled, which can help minimize bot risk.
-2. If you want to fully disable WebRTC (may increase bot risk), you can alternatively set `media.peerconnection.enabled` to `false`.
-3. Simply download any FireFox anti WebRTC extension (there are many anti WebRTC extensions that exist). These may disable certain WebRTC features or disable WebRTC fully. Be cautious, as again these can increase your risk of being flagged.
-
----
-
-## Notes on Fingerprinting
-
-As heavily mentioned before, this method relies on the usage of a legitimate browser (Firefox) to solve turnstile widgets.
-
-While this does help make the browser come off as legitimate to Cloudflare, there are some drawbacks--namely the failure to spoofing fingerprinting metrics.
-
-UserAgent, TLS/JA4, canvas, navigator & hardware fingerprinting metrics are currently all not custom-spoofed by this project.
-
-But, to note, FireFox has **MANY** settings you can set in `about:config` to your liking to minimize fingerprint damage. Additionally, you can change the strictness of tracking protection in `about:preferences#privacy`. Be careful, though. Some settings may cause Cloudflare to flag your session. It's best you experiment with what works, and what doesn't. I may provide more documentation on this later. Also note, since a real, standard browser is used that greatly helps. It still can get many solves. That said, there is currently no custom fingerprint spoofing mechanism in this system though.
+1. Disable WebRTC features in your browser config, if applicable. For example, in FireFox: in `about:config`, set `media.peerconnection.ice.nohost`, `media.peerconnection.ice.default_address_only`, `media.peerconnection.ice.proxy_only_if_behind_proxy`, and `media.peerconnection.ice.obfuscate_host_addresses` to `true`. These stop WebRTC from peeking at any host candidates and accidently leaking your real IP, but STILL leave WebRTC enabled, which can help minimize bot risk.
+2. If you want to fully disable WebRTC (may increase bot risk), you can also just do this. For example, in FireFox, you can set `media.peerconnection.enabled` to `false`.
+3. Simply download any anti WebRTC extension (there are many anti WebRTC extensions that exist). These may disable certain WebRTC features or disable WebRTC fully. Be cautious, as again these can increase your risk of being flagged.
 
 ---
 
@@ -158,7 +151,7 @@ But, to note, FireFox has **MANY** settings you can set in `about:config` to you
 1. Start the **token server**.
 2. Start your backend, token managing and requesting system. 
 3. Start the **auto-clicker**.
-4. Open your **modified webpage**.
+4. Open your **modified webpages**.
 5. Press **F8** to enable the auto-clicker.
 6. Watch it go.
 
@@ -176,15 +169,19 @@ For any turnstile render call custom fields, such as "cData" or "action" as prev
 
 ```
 // proxy_idx = literally just the index of your proxy in the proxy list.
+// user_agent = user-agent string of the target you want to run (matches to navigator.userAgent). 
 // fields = object, { name: value, name2: value2, ... namen: valuen }. Names and values are strings.
-function construct_solver_request_packet(proxy_idx, fields = {}) {
+function construct_solver_request_packet(proxy_idx, user_agent = "", fields = {}) {
+   let encoder = new TextEncoder();
    let packet = Array(5);
    packet[0] = 1;
    packet[1] = proxy_idx & 255;
    packet[2] = (proxy_idx >> 8) & 255;
    packet[3] = (proxy_idx >> 16) & 255;
    packet[4] = (proxy_idx >> 24) & 255;
-   let encoder = new TextEncoder();
+   let user_agent_bytes = encoder.encode(user_agent);
+   packet[5] = user_agent_bytes.length;
+   packet.push(...user_agent_bytes);
    for (let field_name in fields) {
          let field_value = fields[field_name];
          let field_name_bytes = encoder.encode(field_name);
@@ -230,10 +227,12 @@ function parse_available_solvers_count_packet(packet) {
 
 ```
 // packet = packet buffer
-if (packet.byteLength > 4) {
+if (packet.byteLength > 5) {
    // Token Packet
-} else if (packet.byteLength == 4) {
+} else if (packet.byteLength == 5) {
    // Available Solvers Result
+} else if (packet.byteLength == 4) {
+   // Failed Token Result (only solver idx is sent back)
 } else {
    // Solvers Unavailable
 }
@@ -244,10 +243,6 @@ if (packet.byteLength > 4) {
 ## Future Plans/What this Needs (may not be done, but if major updates do occur to this project it will likely be these).
 
 Custom navigator, webgl debug renderer, and window dimensions spoofing.
-
-As previously mentioned, 2026 CF has really amped up their user-agent spoof detection. They now match user-agent reported browser data to even the TLS handshakes you exhibit. A bypass for this is useful, but will also require in depth fingerprint bypassing from both TLS/JA4 and canvas. Due to such complexity it has not yet been added. 
-
-**To deal with this, I might just make this system work with multiple different browsers, and make a proxy extension different browser protocols. This way, I can get custom user-agents and ja4 fingerprints without actually making a custom browser to emit all of them. As for hardware specs and canvas fingerprinting, a custom solution to spoof hardware specs can be easy to make, as that particularly involves modifying navigator and webgl debug renderer properties. Canvas fingerprinting can be edited to match these with some care, however canvas fingerprinting is also not a major risk assessment flag as many browsers as previously stated have features to spoof or implement noise onto these.** 
 
 An automatic page-loader and harvester setup script may be created in order to aid with multi-proxy solving, as per page loads are currently needed for such.
 

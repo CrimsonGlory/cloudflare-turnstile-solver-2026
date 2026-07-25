@@ -27,6 +27,9 @@
 <body>
     <div id="iframe-farm"></div>
     <script>
+        // Deprecated.
+        localStorage.user_agents = "";
+        
         (async () => {
             // Set your token server host.
             const TOKEN_SERVER_HOST = "ws://localhost:8080";
@@ -112,7 +115,7 @@
             token_server_socket.binaryType = "arraybuffer";
 
             token_server_socket.onopen = function () {
-                token_server_socket.send(new Uint8Array([2]));
+                token_server_socket.send(new Uint8Array([2, ...new TextEncoder().encode(navigator.userAgent)]));
             };
 
             token_server_socket.onmessage = async function (e) {

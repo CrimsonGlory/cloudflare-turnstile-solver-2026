@@ -1,4 +1,4 @@
-// Token server to recieve, route tokens, and output total acquired tokens.
+// Token server to recieve solve requests and route tokens.
 
 use futures_util::{SinkExt, StreamExt};
 use std::collections::{HashMap, HashSet};
@@ -20,7 +20,12 @@ struct State {
     // Note this isn't actually a generic queue structure, 
     // there is no specific ordered pick from the HashSet.
     // This doesn't matter for our case as we just want any available solver.
-    available_solvers_queue: HashSet<u32>,
+    available_solvers_queue: HashMap<String, HashSet<u32>>,
+    // Solver socket ids to user-agent HashMap. 
+    // This allows us to not have to send user-agent data in
+    // Solver result packets, as we can just lookup its user-agent in the map
+    // to re-add it to the available_solvers queue in the right user-agent bucket.
+    solver_to_ua: HashMap<u32, String>,
 }
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(0);
@@ -60,9 +65,7 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<State>>) {
 
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if ws_tx.send(msg).await.is_err() {
-                break;
-            }
+            if ws_tx.send(msg).await.is_err() { break };
         }
     });
 
@@ -89,8 +92,7 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<State>>) {
 
                 // Route the token back to the specific requester who asked for it by looking up its requester id.
                 if let Some(requester_tx) = s.connections.get(&requester_id) {
-                    // Forward the token back to the reciever.
-                    // [...solver_idx_bytes, ...token_bytes]
+                    // Forward the token back to the reciever, along with the solver_idx/proxy used for that solve.
                     let mut token_packet = Vec::new();
                     token_packet.extend_from_slice(&raw[5..9]);
                     
@@ -100,6 +102,7 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<State>>) {
                         token_packet.extend_from_slice(&raw[9..]);
                     }
 
+                    // [...solver_idx_bytes, ...token_bytes]
                     let _ = requester_tx.send(Message::Binary(token_packet));
                     println!("[+] Routed token back to requester ID: {}.", requester_id);
                 } else {
@@ -107,58 +110,97 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<State>>) {
                 }
 
                 // The solver is now finished. Re-add it to the queue since it is available now.
-                s.available_solvers_queue.insert(id);
-                println!("[+] Solver {} re-added to queue. Total available: {}.", id, s.available_solvers_queue.len());
+                // Get the solver's respective user-agent bucket/HashSet to add it back to from the solver_to_ua map.
+                if let Some(ua) = s.solver_to_ua.get(&id).cloned() {
+                    s.available_solvers_queue.entry(ua.clone()).or_default().insert(id);
+                    let available_count = s.available_solvers_queue.get(&ua).map(|q| q.len()).unwrap_or(0);
+                    println!("[+] Solver {} re-added to queue. Total available for UA '{}': {}.", id, ua, available_count);
+                }
             }
 
             // On demand solve request from a requester.
             // This will forward our request for a solve to the next available solver in queue.
-            // [1, ...solver_idx_bytes]
+            // [1, ...solver_idx_bytes(4), user_agent_len(1), ...user_agent_bytes, ...(field_name_len, ...field_name_bytes, field_value_len, ...field_value_bytes)]
             1 => {
+                let ua_len = raw[5] as usize;
+                let ua_bytes = &raw[6..6 + ua_len];
+                let requested_ua = String::from_utf8_lossy(ua_bytes).to_string();
+
                 let mut s = state.lock().await;
                 
-                let solver_id_opt = s.available_solvers_queue.iter().next().copied();
+                // Select a target solver id.
+                // If the ua_len is 0, no ua was specified. It'll select a solver from a random ua bucket (next in the iter).
+                // If the ua was specified, it'll pick a solver from that bucket.
+                let solver_opt = if ua_len == 0 {
+                    s.available_solvers_queue.iter()
+                        .filter_map(|(ua, queue)| queue.iter().next().map(|&id| (id, ua.clone())))
+                        .next()
+                } else {
+                    s.available_solvers_queue
+                        .get(&requested_ua)
+                        .and_then(|queue| queue.iter().next().map(|&id| (id, requested_ua.clone())))
+                };
 
-                if let Some(solver_id) = solver_id_opt {
-                    // Remove this solver now as it is occupied.
-                    s.available_solvers_queue.remove(&solver_id);
+                if let Some((solver_id, target_ua)) = solver_opt {
+                    // Remove this solver from its available_solvers_queue bucket now as it is occupied.
+                    if let Some(queue) = s.available_solvers_queue.get_mut(&target_ua) {
+                        queue.remove(&solver_id);
+                    }
 
                     if let Some(solver_tx) = s.connections.get(&solver_id) {
-                        // [...solver_idx_bytes, ...requester_id_bytes, ...(field_name_len, ...field_name_bytes, field_value_len, ...field_value_bytes)]
+                        // Forward the request data to the solver.
                         let mut forward_packet = Vec::new();
                         forward_packet.extend_from_slice(&raw[1..5]);
                         forward_packet.extend_from_slice(&id.to_le_bytes());
                         
-                        if raw.len() > 5 {
-                            forward_packet.extend_from_slice(&raw[5..]);
+                        let fields_start_idx = 6 + ua_len;
+                        if raw.len() > fields_start_idx {
+                            forward_packet.extend_from_slice(&raw[fields_start_idx..]);
                         }
 
+                        // [...solver_idx_bytes, ...requester_id_bytes, ...(field_name_len, ...field_name_bytes, field_value_len, ...field_value_bytes)]
                         let _ = solver_tx.send(Message::Binary(forward_packet));
-                        println!("[+] Forwarded on-demand request from {} to solver {}.", id, solver_id);
+                        println!("[+] Forwarded on-demand request from {} to solver {} (Requested UA: '{}').", id, solver_id, requested_ua);
                     }
                 } else {
-                    // Indicate that this solver request couldn't go through.
+                    // Indicate that this solver request couldn't go through due to unavailable solvers.
                     // [0]
-                    let _ = tx.send(Message::binary(vec![0]));
-                    println!("[-] No solvers available in the queue to handle request from {}.", id);
+                    let _ = tx.send(Message::Binary(vec![0]));
+                    println!("[-] No solvers available in the queue to handle request from {} for UA '{}'.", id, requested_ua);
                 }
             }
 
             // Register this socket as a solver, and append its id to the available_solvers_queue.
-            // [2]
+            // [2, ...user_agent_bytes]
             2 => {
+                let ua_bytes = &raw[1..];
+                let ua = String::from_utf8_lossy(ua_bytes).to_string();
+
+                // Insert the solver into its solver id to ua map, 
+                // and add it to the available solvers queue.
                 let mut s = state.lock().await;
-                s.available_solvers_queue.insert(id);
-                println!("[+] Solver {} added to queue. Total available: {}.", id, s.available_solvers_queue.len());
+                s.solver_to_ua.insert(id, ua.clone());
+                s.available_solvers_queue.entry(ua.clone()).or_default().insert(id);
+                
+                let available_count = s.available_solvers_queue.get(&ua).map(|q| q.len()).unwrap_or(0);
+                println!("[+] Solver {} added to queue. Total available for UA '{}': {}.", id, ua, available_count);
             }
 
             // Request to recieve all currently available solvers. Useful for checking how many solver instances you can spawn.
             // [3]
             3 => {
                 let s = state.lock().await;
-                let available_solvers_count = s.available_solvers_queue.len() as u32;
-                // [...available_solvers_count_bytes]
-                let _ = tx.send(Message::Binary(available_solvers_count.to_le_bytes().to_vec()));
+                // Sum all available solvers across all ua HashSets.
+                let available_solvers_count = s.available_solvers_queue.values().map(|q| q.len()).sum::<usize>() as u32;
+                
+                let mut response_packet = available_solvers_count.to_le_bytes().to_vec();
+                // We push 0 so that it hits length 5. The failed solve packet back to the client is length 4. 
+                // Since our system uses length based checking to parse the packet type, adding this extra byte removes
+                // the length collision. 
+                response_packet.push(0); 
+                
+                // [...available_solvers_count_bytes, 0]
+                let _ = tx.send(Message::Binary(response_packet));
             }
 
             _ => {
@@ -170,6 +212,17 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<State>>) {
     // Disconnect socket and clear data.
     let mut s = state.lock().await;
     s.connections.remove(&id);
-    s.available_solvers_queue.remove(&id);
+    
+    // If socket was a solver/found in solver_to_ua map remove it from there,
+    // and remove it from the solvers_queue for that respective ua's HashSet.
+    if let Some(ua) = s.solver_to_ua.remove(&id) {
+        if let Some(queue) = s.available_solvers_queue.get_mut(&ua) {
+            queue.remove(&id);
+            if queue.is_empty() {
+                s.available_solvers_queue.remove(&ua);
+            }
+        }
+    }
+    
     println!("[-] Socket {} disconnected.", id);
 }
