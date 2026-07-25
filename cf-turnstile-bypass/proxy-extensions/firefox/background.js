@@ -98,7 +98,7 @@ browser.proxy.onError.addListener(error => {
 });
 
 // Answer proxy authentication challenges with any stored credentials.
-// Firefox has a separate onAuthRequired listener for this.
+// Firefox has a separate onAuthRequired listener for this, which we use here.
 browser.webRequest.onAuthRequired.addListener(
     (details) => {
         if (!details.isProxy) return {};

@@ -62,7 +62,7 @@ window.addEventListener("message", (event) => {
                 })();
             `;
             
-            // Inject and then immediately remove the script tag after execution is compplete.
+            // Inject and then immediately remove the script tag after execution is complete.
             document.documentElement.appendChild(script);
             script.remove();
         }
