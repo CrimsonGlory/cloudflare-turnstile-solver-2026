@@ -263,6 +263,8 @@ if (packet.byteLength > 5) {
 
 Support (extensions) for more browsers.
 
+Bypass chlPageData turnstile fields.
+
 Canvas fingerprint spoofing to match given hardware specs.
 
 An automatic page-loader and harvester setup script may be created in order to aid with multi-proxy solving, as per page loads are currently needed for such.
