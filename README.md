@@ -79,7 +79,7 @@ The bypass is comprised of four main components:
 
 ### 1. Token Harvester / Turnstile Widget Loader
 
-The Token Harvester loads the Turnstile widget by spawning multiple iframe-based solvers, each pointing at a different Cloudflare site widget. Every solver iframe connects to the token server and forwards any solved tokens to it, which is done once it receives an on demand request from your backend/receivers.
+The Token Harvester loads the Turnstile widget by spawning iframe-based solvers, each pointing at a different Cloudflare site widget. Every solver iframe connects to the token server and forwards any solved tokens to it, which is done once it receives an on demand request from your backend/receivers.
 
 **Setup:**
 
@@ -115,7 +115,7 @@ The clicker identifies Cloudflare Turnstile checkboxes by analyzing pixel RGB va
 
 ### 3. Token Server
 
-The Token Server doesn't participate in solving—it routes solved requests to available solvers, and forwards completed tokens back to their respective requesters. Solver iframes forward their tokens here as they're solved.
+The Token Server doesn't participate in solving—it routes solver requests to available solvers, and forwards completed tokens back to their respective requesters. Solver iframes forward their tokens here as they're solved.
 
 **Setup:**
 
