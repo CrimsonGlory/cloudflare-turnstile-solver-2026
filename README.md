@@ -180,6 +180,8 @@ You will need a reference to a proxies txt list. This list should match the one 
 
 For any turnstile render call custom fields, such as "cData" or "action" as previously mentioned, you'll need to figure out how they are generated for your target, and recreate the logic to how these fields are generated so that you can pass them into your solve request packet. "action" is usually a hardcoded string, but "cData" is often used as an individual ID/verification field. In short, ensure all fields of the turnstile render call match.
 
+For any JavaScript API fields you'd like to spoof, you'll also need to send that data into the fields arguments of the construct_solver_request_packet. Details on how to structure the fields data is provided in previous sections (see token server section).
+
 **Construct solve request packet:**
 
 ```javascript
