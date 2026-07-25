@@ -37,11 +37,19 @@ A proof-of-concept Cloudflare Turnstile bypass system built in Rust. Includes a 
 
 ---
 
+## Why use this Method?
+
+This method is designed as a free alternative (besides proxies) to more top-level, or "enterprise" grade bypasses. I wanted to avoid solver APIs, and webdriver methods, for a completely real and legit browser instance. 
+
+Also, as previously mentioned, this method is particularly most effective when targeting specific websites, as even with an automatic page loader, custom turnstile render field calls, for example, need to be managed per-website. This method is NOT designed as page load -> solve for any website. So it is not viable for webscraping.
+
+What this method IS viable for, though, is solving repeated instances of Cloudflare Turnstiles on a singular site. Though, I have not compared it to standard methods like undetected Selenium loading, so I can't say if it's particularly better or worse, I can say this can safely generate many tokens, while being an extremely simple and free alternative to API services. 
+
 ## Supported Browsers (as of now).
 
 To help create fingerprint variation, the goal of this system is to support multiple browsers (i.e. they have a proxy connector extension).
 
-Current browsers that are supported (as a note right now it's only FireFox, I plan to add support for CDP browsers very soon). 
+Current browsers that are supported (as a note right now it's only FireFox, I plan to add support for CDP browsers very soon). This is still just a work-in-progress.
 
 - FireFox. You can spawn as many pages as you want. Proxies are per tab, not linked to account.
 
@@ -69,7 +77,7 @@ The bypass is comprised of four main components:
 
 ### 1. Token Harvester / Turnstile Widget Loader
 
-The Token Harvester loads the Turnstile widget by spawning multiple iframe-based solvers, each pointing at a different Cloudflare site widget. Every solver iframe connects to the token server and forwards any solved tokens to it, which is done once it recieves an on demand request from your backend/recievers.
+The Token Harvester loads the Turnstile widget by spawning multiple iframe-based solvers, each pointing at a different Cloudflare site widget. Every solver iframe connects to the token server and forwards any solved tokens to it, which is done once it receives an on demand request from your backend/receivers.
 
 **Setup:**
 
@@ -78,7 +86,7 @@ The Token Harvester loads the Turnstile widget by spawning multiple iframe-based
   
    - If you do not know how to access a sitekey, here is a short and easy method you can use to access it: in devtools, find the turnstile.js file in the sources tab. In it, ctrl f "sitekey". You'll see many instances. You can breakpoint a few of these and then run the page to get into the scope, which will have the sitekey. 
 
-2. **Set your proxies.**  Set your linesplit list of proxies to `localStorage.proxies`. The proxy extension will connect to a proxy from this list according to the recieved solver idx. Note the proxies list should include the protocol extension protocol://
+2. **Set your proxies.**  Set your linesplit list of proxies to `localStorage.proxies`. The proxy extension will connect to a proxy from this list according to the received solver idx. Note the proxies list should include the protocol extension protocol://
 
 3. **Apply as browser overrides.** Replace the target webpage's main HTML file with `index.html`. 
 
@@ -105,7 +113,7 @@ The clicker identifies Cloudflare Turnstile checkboxes by analyzing pixel RGB va
 
 ### 3. Token Server
 
-The Token Server doesn't participate in solving--it routes solved requests to available solvers, and forwards completed tokens back to their respective requesters. Solver iframes forward their tokens here as they're solved.
+The Token Server doesn't participate in solving—it routes solved requests to available solvers, and forwards completed tokens back to their respective requesters. Solver iframes forward their tokens here as they're solved.
 
 **Setup:**
 
@@ -115,43 +123,41 @@ Set the `PORT` value in config. That's all.
 
 *All values are little-endian.*
 
-*Serverbound (client -> server):*
+#### Serverbound (client -> server):
 
 | Sent From | Header | Description |
 |-----------|--------|-------------|
-| Solver | `0` | Incoming token result from a solver. The server routes it back to the specific requester who asked for it by extracting the requester id, then re-adds the solver to the available queue. Structure: <0, ...requester_id_bytes (u32), ...solver_idx_bytes (u32), ...token_bytes>. If the solver failed to get a token, then there are no token bytes. |
-| Reciever | `1` | On-demand solve request from a requester. The server pulls the next available solver from the queue and forwards this assignment to them. You can specify a specific user-agent in this packet, which will then make the token server force a solver with that user-agent. This is particularly useful for mimicing real web traffic, and distributing solves across an amount that mimics the real web traffic distribution of user-agents. You can also just leave user-agent as "" for a random selection. The `.render` function call for turnstile, which initializes the widget, can take in special fields and extra data, such as `action`, or `cData`. To counter this, you may also specify field data for these in this packet, as shown in the provided structure. These fields will then be passed into the render call the solver makes. Structure: <1, ...solver_idx_bytes (u32), user_agent_len (u8), ...user_agent_bytes ...(field_name_len (u8), ...field_name_bytes, field_value_len (u8), ...field_value_bytes)>. |
-| Solver | `2` | Register the sending socket as a solver. The server appends its socket id to the available solvers queue. It appends the socket id to the solver queue bucket that matches the specified user-agent provided by the solver. If a bucket/HashSet for such does not exist yet, then it is created and the solver's socket id is added to it. A user-agent can be referred to by the reciever when making requests, which will force only a solver with the matching user-agent to solve the request. Structure: <2, ...user_agent_bytes>. |
-| Reciever | `3` | Request the total available solvers count. Good for analyzing how many active solving instances you can spawn. Structure: <3>. |
+| Solver | `0` | Incoming token result from a solver. The server routes it back to the specific requester who asked for it by extracting the requester ID, then re-adds the solver to the available queue.<br><br>**Structure:** `<0, ...requester_id_bytes (u32), ...solver_idx_bytes (u32), ...token_bytes>`<br>*Note: If the solver failed to get a token, then there are no token bytes.* |
+| Receiver | `1` | On-demand solve request from a requester. The server pulls the next available solver from the queue and forwards this assignment to them.<br><br>**User-Agent Routing:** You can specify a specific user-agent in this packet, which will then make the token server force a solver with that user-agent. This is particularly useful for mimicking real web traffic, and distributing solves across an amount that mimics the real web traffic distribution of user-agents. You can also just leave user-agent as `""` for a random selection.<br><br>**Field Spoofing:** The `fields` data allows you to implement JS field spoofs for a few things:<br>• **JS APIs:** You can spoof JS APIs like navigator properties and window dimensions by specifying `navigator.property`, `window.property`, etc. You can spoof with whatever JS properties you'd like basically. Window/viewport dimensions, navigator properties, etc. are all great properties you can spoof. However, so as to not confuse it with another field type (the next we will talk about), your JS field spoofs should refer to names in the structure of `API.key`. Nested references, like `API.key.key`, are also fine. For your field values, though obviously for the protocol they must be passed in as string data, if the values are directly castable to other primitive types (number, boolean), they will be automatically converted to such by the solvers for their logic. Otherwise, if not directly convertable to said types, they will be kept as strings.<br>• **Render Calls:** The `turnstile.render` function call, which initializes the widget, can take in special fields and extra data, such as `action`, or `cData`. To counter this, you may also specify field data for these in this packet. To specify field data for this, simply make the field name data you pass in the form of `key`. This contrasts from the `API.key` structure of the first case, and the system will know you are referring to a custom render call field. These fields will then be passed into the render call the solver makes.<br><br>**Structure:** `<1, ...solver_idx_bytes (u32), user_agent_len (u8), ...user_agent_bytes ...(field_name_len (u8), ...field_name_bytes, field_value_len (u8), ...field_value_bytes)>` |
+| Solver | `2` | Register the sending socket as a solver. The server appends its socket ID to the available solvers queue.<br><br>**Queue Buckets:** It appends the socket ID to the solver queue bucket that matches the specified user-agent provided by the solver. If a bucket/HashSet for such does not exist yet, then it is created and the solver's socket ID is added to it. A user-agent can be referred to by the receiver when making requests, which will force only a solver with the matching user-agent to solve the request.<br><br>**Structure:** `<2, ...user_agent_bytes>` |
+| Receiver | `3` | Request the total available solvers count. Good for analyzing how many active solving instances you can spawn.<br><br>**Structure:** `<3>` |
 
-*Clientbound (server -> client):*
+#### Clientbound (server -> client):
 
 | Endpoint | Name | Description |
 |----------|------|-------------|
-| Reciever | Token | Incoming token delivered to a requester. Structure: <...solver_idx_bytes (u32), ...token_bytes>. If the solver failed to get a token, then there are no token bytes. |
-| Reciever | Solvers Unavailable | A request made by a solver could not be completed because no solvers were available to accept it. Structure: <0>. |
-| Solver | Solve Request | Solve a turnstile widget request that is delivered to a solver. Structure: <...solver_idx_bytes (u32), ...requester_id_bytes (u32), ...(field_name_len (u8), ...field_name_bytes, field_value_len (u8), ...field_value_bytes)>. |
-| Reciever | Available Solvers Result | The result to the available solvers count request you made. Note, the zero at the end of this packet is dummy data. It is actually added because I made the accepted parsing system for these packets length based to check packet type, but the token packet will deliver 4 bytes if it fails to recieve a token. I added the extra byte to this packet to solve the length collision because no branching logic is required for this one, and its a much smaller and simpler case so I just prefered it. Structure: <...available_solvers_bytes (u32), 0>. | 
+| Receiver | Token | Incoming token delivered to a requester.<br><br>**Structure:** `<...solver_idx_bytes (u32), ...token_bytes>`<br>*Note: If the solver failed to get a token, then there are no token bytes.* |
+| Receiver | Solvers Unavailable | A request made by a solver could not be completed because no solvers were available to accept it.<br><br>**Structure:** `<0>` |
+| Solver | Solve Request | Solve a turnstile widget request that is delivered to a solver. Field data is parsed and does whatever is necessary (`API.key` -> JavaScript API is spoofed with the given field value, `key` -> turnstile render call adds this field).<br><br>**Structure:** `<...solver_idx_bytes (u32), ...requester_id_bytes (u32), ...(field_name_len (u8), ...field_name_bytes, field_value_len (u8), ...field_value_bytes)>` |
+| Receiver | Available Solvers Result | The result to the available solvers count request you made.<br><br>**Length Collision Fix:** Note, the zero at the end of this packet is dummy data. It is actually added because I made the accepted parsing system for these packets length-based to check packet type, but the token packet will deliver 4 bytes if it fails to receive a token. I added the extra byte to this packet to solve the length collision because no branching logic is required for this one, and it's a much smaller and simpler case so I just preferred it.<br><br>**Structure:** `<...available_solvers_bytes (u32), 0>` |
 
-*Note that the clientbound packets do not have headers since each endpoint recieves few, easily disceranble packets. Recievers recieve a packet of only length 1 (Solvers Unavailable), the token packet itself (can be length 4 if there is no token and the request failed), or a packet of length 5 (total available solvers). This makes discerning packets by length easy. The solver can only recieve a solve request.*
+> **Note:** The clientbound packets do not have headers since each endpoint receives few, easily discernible packets. Receivers receive a packet of only length 1 (Solvers Unavailable), the token packet itself (can be length 4 if there is no token and the request failed), or a packet of length 5 (total available solvers). This makes discerning packets by length easy. The solver can only receive a solve request.
+
+**How it works:**
+
+The architecture for the specific protocol of the server is above. The server assigns an ID to every socket, allows solvers to register themselves, for which it stores into available solver buckets (HashSets accessed by an outer HashMap that uses the respective user-agents as keys, meaning you can refer to solvers with specific user-agents only). Receivers can then simply send packets to the server to request solves from solvers, which if the solvers are available the server will forward. The solvers will send the solve results to the server, which will then forward it back to the original requester, which it does by bouncing around the original `requester_id` within these packets.
 
 ---
 
 ### 4. Proxy Extensions
 
-The extensions allow us to utilize browser proxy API capabilities to connect to proxies, per tab.
+The extensions allow us to utilize browser proxy API capabilities to connect to proxies, per tab. They also have JS API anti-fingerprint/spoof metrics, along with a WebRTC host peeking block.
 
 For each browser you'll be using, you'll need to add the respective extension for that browser from `proxy-extensions` to whatever browser you are using (ex. firefox for firefox, cdp for cdp browsers, truly a shocker), and run it. These extensions provide the API necessary for asynchronous proxy connections, allowing you to await and connect to a proxy before continuing execution. 
 
----
+**How it works:**
 
-## Bypassing WebRTC
-
-WebRTC can leak your real IP. To solve this issue, here are three solutions you can use:
-
-1. Disable WebRTC features in your browser config, if applicable. For example, in FireFox: in `about:config`, set `media.peerconnection.ice.nohost`, `media.peerconnection.ice.default_address_only`, `media.peerconnection.ice.proxy_only_if_behind_proxy`, and `media.peerconnection.ice.obfuscate_host_addresses` to `true`. These stop WebRTC from peeking at any host candidates and accidently leaking your real IP, but STILL leave WebRTC enabled, which can help minimize bot risk.
-2. If you want to fully disable WebRTC (may increase bot risk), you can also just do this. For example, in FireFox, you can set `media.peerconnection.enabled` to `false`.
-3. Simply download any anti WebRTC extension (there are many anti WebRTC extensions that exist). These may disable certain WebRTC features or disable WebRTC fully. Be cautious, as again these can increase your risk of being flagged.
+Each extension listens for a `window.postMessage` to `SET_TAB_PROXY`. This post by the client (which solvers use), passes in the target proxy, and addiitonal JS field data you'd like to spoof (see details on structuring field data for packets in the token server section). The extension can then spoof this JS APIs for the fields you selected, and also then effectively connect to a proxy or store its data (this depends on the browser, browser protocols vary so there's a few approaches to this), and then either it's connected to the proxy, so any request made is proxied, OR requests are listened for, and then the proxy details are applied to requests that are made. Also, **WebRTC host peeking/STUN search features are disabled by these extensions**, meaning WebRTC host ip leaks are blocked while still keeping WebRTC itself enabled. Upon the proxy having fully connected, the system will send back a `PROXY_READY` result, which allows for our solvers to fully await proxy connection before continuing execution. The JS apis are spoofed by injecting a `<script></script>` into the page that force the API values to whatever is needed. It modifies the `get` property to return a value to custom symbol key of the object, which will store our spoofed value, and overrides the `set` property for the value to do nothing. The point of the spoofed symbol key is that it allows us to re-edit that field without errors, but external scripts cannot set values or do anything still. The script is removed once execution is complete.
 
 ---
 
@@ -251,7 +257,9 @@ if (packet.byteLength > 5) {
 
 ## Future Plans/What this Needs (may not be done, but if major updates do occur to this project it will likely be these).
 
-Custom navigator, webGL debug renderer, and window dimensions spoofing.
+Support (extensions) for more browsers.
+
+WebGL & canvas fingerprint sppofing.
 
 An automatic page-loader and harvester setup script may be created in order to aid with multi-proxy solving, as per page loads are currently needed for such.
 

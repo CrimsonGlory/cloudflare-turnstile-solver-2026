@@ -7,7 +7,8 @@
     "proxy",
     "tabs",
     "webRequest",
-    "webRequestBlocking"
+    "webRequestBlocking",
+    "privacy"
   ],
   "host_permissions": [
     "<all_urls>"

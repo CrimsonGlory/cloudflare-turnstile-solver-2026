@@ -1,17 +1,16 @@
 // Object map for proxy ID info.
 let tab_proxies = {};
-
 let origin_proxies = {};
-
-// Object map for per-tab/per-origin user agent overrides.
-let tab_user_agents = {};
-
-let origin_user_agents = {};
 
 // Object map for per-tab/per-origin proxy authentication credentials.
 let tab_proxy_credentials = {};
-
 let origin_proxy_credentials = {};
+
+// Prevent WebRTC from leaking the host's local IP address (peeking), 
+// without disabling WebRTC itself.
+if (browser.privacy && browser.privacy.network && browser.privacy.network.webRTCIPHandlingPolicy) {
+    browser.privacy.network.webRTCIPHandlingPolicy.set({ value: "default_public_interface_only" });
+}
 
 // Listen to messages posted by the client if we want to set up a proxy.
 browser.runtime.onMessage.addListener((message, sender, send_response) => {
@@ -42,17 +41,6 @@ browser.runtime.onMessage.addListener((message, sender, send_response) => {
 
                 tab_proxies[tab_id] = proxy_config;
                 origin_proxies[tab_origin] = proxy_config;
-
-                // Optional user agent override. If none was passed, clear any
-                // previously stored override so the tab reverts to its real UA.
-                if (message.user_agent) {
-                    tab_user_agents[tab_id] = message.user_agent;
-                    origin_user_agents[tab_origin] = message.user_agent;
-                    console.log(`[Proxy Bridge] Tab ${tab_id} user agent overridden to: ${message.user_agent}`);
-                } else {
-                    delete tab_user_agents[tab_id];
-                    delete origin_user_agents[tab_origin];
-                }
 
                 // Optional proxy auth, parsed as a "protocol://user:pass@host:port" proxy URL.
                 // If no credentials were passed, clear any previously stored ones for this tab/origin.
@@ -109,35 +97,8 @@ browser.proxy.onError.addListener(error => {
     console.error(`[Proxy Bridge] Network error:`, error.message);
 });
 
-// Rewrite the outgoing User-Agent header for any tab/origin that has an
-// override configured. Tabs without one are left alone and send their real UA.
-browser.webRequest.onBeforeSendHeaders.addListener(
-    (details) => {
-        let ua_override = tab_user_agents[details.tabId];
-
-        if (!ua_override && details.tabId == -1) {
-            let request_origin = details.originUrl ? new URL(details.originUrl).origin : null;
-            if (request_origin && origin_user_agents[request_origin]) {
-                ua_override = origin_user_agents[request_origin];
-            }
-        }
-
-        if (ua_override) {
-            let headers = details.requestHeaders.filter(
-                (header) => header.name.toLowerCase() !== "user-agent"
-            );
-            headers.push({ name: "User-Agent", value: ua_override });
-            return { requestHeaders: headers };
-        }
-
-        return {};
-    },
-    { urls: ["<all_urls>"] },
-    ["blocking", "requestHeaders"]
-);
-
-// Answer proxy authentication challenges with any stored credentials, 
-// FireFox has a seperate onAuthRequired listener for this.
+// Answer proxy authentication challenges with any stored credentials.
+// Firefox has a separate onAuthRequired listener for this.
 browser.webRequest.onAuthRequired.addListener(
     (details) => {
         if (!details.isProxy) return {};
@@ -165,9 +126,6 @@ browser.tabs.onRemoved.addListener((tab_id) => {
     if (tab_proxies[tab_id]) {
         console.log(`[Proxy Bridge] Tab ${tab_id} closed. Clearing proxy mapping.`);
         delete tab_proxies[tab_id];
-    }
-    if (tab_user_agents[tab_id]) {
-        delete tab_user_agents[tab_id];
     }
     if (tab_proxy_credentials[tab_id]) {
         delete tab_proxy_credentials[tab_id];

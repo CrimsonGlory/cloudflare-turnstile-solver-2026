@@ -91,7 +91,8 @@
 
                     window.postMessage({
                         type: "SET_TAB_PROXY",
-                        proxy_details: proxy
+                        proxy_details: proxy,
+                        js_API_spoof_fields: window.js_API_spoof_fields
                     }, "*");
                 });
             }
@@ -116,6 +117,7 @@
                 let packet_u8 = new Uint8Array(e.data);
                 window.solver_idx = packet.getUint32(0, true);
                 window.requester_id = packet.getUint32(4, true);
+                window.js_API_spoof_fields = {};
                 window.extra_cf_turnstile_render_fields = {};
                 let ptr = 8;
                 let decoder = new TextDecoder();
@@ -126,10 +128,15 @@
                     let field_value_length = packet_u8[ptr++];
                     let field_value = decoder.decode(packet_u8.slice(ptr, ptr + field_value_length));
                     ptr = ptr + field_value_length;
-                    window.extra_cf_turnstile_render_fields[field_name] = field_value;
+                    if (field_name.indexOf(".") != -1) {
+                        window.js_API_spoof_fields[field_name] = field_value;
+                    } else {
+                        window.extra_cf_turnstile_render_fields[field_name] = field_value;
+                    };
                 };
                 console.log("Solver idx: " + window.solver_idx);
                 console.log("Requester id: " + window.requester_id);
+                console.log("JavaScript API spoof fields: ", window.js_API_spoof_fields);
                 console.log("Extra render call fields: ", window.extra_cf_turnstile_render_fields);
                 if (USE_PROXY_SOLVING) await connect_to_proxy();
                 start_solvers();

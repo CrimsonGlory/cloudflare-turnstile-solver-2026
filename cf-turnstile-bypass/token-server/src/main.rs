@@ -1,4 +1,4 @@
-// Token server to recieve solve requests and route tokens.
+// Token server to receive solve requests and route tokens.
 
 use futures_util::{SinkExt, StreamExt};
 use std::collections::{HashMap, HashSet};
@@ -79,8 +79,8 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<State>>) {
         let header = raw[0];
 
         match header {
-            // Token result from solver. This token is recieved, 
-            // and forwarded to the requester (reciever) with the associated requester_id.
+            // Token result from solver. This token is received, 
+            // and forwarded to the requester (receiver) with the associated requester_id.
             // [0, ...requester_id_bytes, ...solver_idx_bytes ...token_bytes]
             // If the solve failed, there will be no token bytes in this packet.
             0 => {
@@ -92,12 +92,12 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<State>>) {
 
                 // Route the token back to the specific requester who asked for it by looking up its requester id.
                 if let Some(requester_tx) = s.connections.get(&requester_id) {
-                    // Forward the token back to the reciever, along with the solver_idx/proxy used for that solve.
+                    // Forward the token back to the receiver, along with the solver_idx/proxy used for that solve.
                     let mut token_packet = Vec::new();
                     token_packet.extend_from_slice(&raw[5..9]);
                     
                     // If the solve failed, there will be no token bytes in the packet,
-                    // and thus we send no token bytes to the reciever.
+                    // and thus we send no token bytes to the receiver.
                     if raw.len() > 9 {
                         token_packet.extend_from_slice(&raw[9..]);
                     }
@@ -186,7 +186,7 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<State>>) {
                 println!("[+] Solver {} added to queue. Total available for UA '{}': {}.", id, ua, available_count);
             }
 
-            // Request to recieve all currently available solvers. Useful for checking how many solver instances you can spawn.
+            // Request to receive all currently available solvers. Useful for checking how many solver instances you can spawn.
             // [3]
             3 => {
                 let s = state.lock().await;
