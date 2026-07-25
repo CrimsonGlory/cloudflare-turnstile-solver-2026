@@ -261,7 +261,7 @@ if (packet.byteLength > 5) {
 
 Support (extensions) for more browsers.
 
-WebGL & canvas fingerprint sppofing.
+WebGL & canvas fingerprint spoofing.
 
 An automatic page-loader and harvester setup script may be created in order to aid with multi-proxy solving, as per page loads are currently needed for such.
 
