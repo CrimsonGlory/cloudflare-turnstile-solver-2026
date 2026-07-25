@@ -149,10 +149,10 @@ WebRTC can leak your real IP. To solve this issue, here are three solutions you 
 ## Starting It Up
 
 1. Start the **token server**.
-2. Start your backend, token managing and requesting system. 
-3. Start the **auto-clicker**.
-4. Open your **modified webpages**.
-5. Press **F8** to enable the auto-clicker.
+2. Start the **auto-clicker**.
+3. Open your **modified webpages**.
+4. Press **F8** to enable the auto-clicker.
+5. Start your backend, token managing and requesting system. 
 6. Watch it go.
 
 ---
