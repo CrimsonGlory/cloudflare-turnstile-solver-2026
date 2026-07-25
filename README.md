@@ -47,6 +47,15 @@ Current browsers that are supported (as a note right now it's only FireFox, I pl
 
 ---
 
+# Proxy Formats
+
+`protocol://host:port`
+`protocol://user:pass@host:port`
+
+The http protocol is recommended. Some browsers have iffy implementation for socks proxies.
+
+---
+
 ## Components
 
 The bypass is comprised of four main components:
