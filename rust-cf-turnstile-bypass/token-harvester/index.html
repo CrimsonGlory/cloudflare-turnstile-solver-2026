@@ -27,9 +27,6 @@
 <body>
     <div id="iframe-farm"></div>
     <script>
-        // Deprecated.
-        localStorage.user_agents = "";
-        
         (async () => {
             // Set your token server host.
             const TOKEN_SERVER_HOST = "ws://localhost:8080";
@@ -52,7 +49,6 @@
             window.sitekey = SITEKEY;
 
             let proxies = localStorage.proxies.split(/\r?\n/).map(p => p.trim()).filter(Boolean);
-            let user_agents = localStorage.user_agents.split(/\r?\n/).map(p => p.trim()).filter(Boolean);
 
             window.generate_fail_response_packet = function () {
                 let pkt = new Uint8Array(9);
@@ -70,9 +66,6 @@
 
             async function connect_to_proxy() {
                 let proxy = proxies[window.solver_idx];
-                let user_agent = undefined;
-
-                if (user_agents.length != 0) user_agent = user_agents[window.solver_idx % user_agents.length];
 
                 console.log(`Requesting extension to bind tab to proxy: ${proxy}`);
 
@@ -98,8 +91,7 @@
 
                     window.postMessage({
                         type: "SET_TAB_PROXY",
-                        proxy_details: proxy,
-                        user_agent: user_agent
+                        proxy_details: proxy
                     }, "*");
                 });
             }
