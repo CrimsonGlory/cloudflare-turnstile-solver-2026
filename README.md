@@ -39,7 +39,9 @@ A proof-of-concept Cloudflare Turnstile bypass system built in Rust. Includes a 
 
 ## Why use this Method?
 
-This method is designed as a free alternative (besides proxies) to more top-level, or "enterprise" grade bypasses. I wanted to avoid solver APIs, and webdriver methods, for a completely real and legit browser instance. 
+This method is designed as a free alternative to more top-level, or "enterprise" grade bypasses. I wanted to avoid solver APIs, and webdriver methods, for a completely real and legit browser instance. 
+
+This also avoids the use of stealth browsers, which work, but constantly require updating all fingerprinting metrics to match current browsers. This is exceptionally high maintenance. I wanted to create a method that also requires much lower maintenance, and will generally be easy to re-implement if patched.
 
 Also, as previously mentioned, this method is particularly most effective when targeting specific websites, as even with an automatic page loader, custom turnstile render field calls, for example, need to be managed per-website. This method is NOT designed as page load -> solve for any website. So it is not viable for webscraping.
 
