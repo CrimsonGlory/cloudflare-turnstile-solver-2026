@@ -6,11 +6,20 @@ let native_to_string = function toString() {
 // Inject a script to ensure window.matchMedia always returns true on "matches".
 (function () {
     
-    // Spoof native methods and their string representations.
-    function create_mock_method(name) {
+    // Spoof methods (e.g., addListener) where the listener is the 1st argument.
+    function create_legacy_mock(name) {
         return function (listener) {
             if (listener != null && typeof listener !== 'function' && typeof listener !== 'object') {
                 throw new TypeError(`Failed to execute '${name}' on 'MediaQueryList': parameter 1 is not of type 'Object'.`);
+            }
+        };
+    }
+
+    // Spoof methods (e.g., addEventListener) where the listener is the 2nd argument.
+    function create_modern_mock(name) {
+        return function (type, listener) {
+            if (listener != null && typeof listener !== 'function' && typeof listener !== 'object') {
+                throw new TypeError(`Failed to execute '${name}' on 'EventTarget': parameter 2 is not of type 'Object'.`);
             }
         };
     }
@@ -29,11 +38,11 @@ let native_to_string = function toString() {
             media: query_string,
             // null
             onchange: null,
-            addListener: create_mock_method('addListener'),
-            removeListener: create_mock_method('removeListener'),
-            addEventListener: create_mock_method('addEventListener'),
-            removeEventListener: create_mock_method('removeEventListener'),
-            dispatchEvent: create_mock_method('dispatchEvent')
+            addListener: create_legacy_mock('addListener'),
+            removeListener: create_legacy_mock('removeListener'),
+            addEventListener: create_modern_mock('addEventListener'),
+            removeEventListener: create_modern_mock('removeEventListener'),
+            dispatchEvent: function(event) { return true; } 
         };
     };
 
