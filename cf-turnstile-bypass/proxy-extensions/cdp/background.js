@@ -8,7 +8,7 @@ let origin_proxy_credentials = {};
 let attached_tabs = new Set();
 
 // Load state from local storage on script wakeup to prevent data loss after idling.
-let state_loaded = chrome.storage.local.get([
+const state_loaded = chrome.storage.local.get([
     'tab_proxies', 'origin_proxies', 'tab_proxy_credentials', 'origin_proxy_credentials'
 ]).then((res) => {
     tab_proxies = res.tab_proxies || {};
@@ -38,7 +38,7 @@ async function attach_debugger_if_needed(tab_id) {
     if (attached_tabs.has(tab_id)) return;
 
     try {
-        let target = { tabId: tab_id };
+        const target = { tabId: tab_id };
         await chrome.debugger.attach(target, "1.3");
         attached_tabs.add(tab_id);
 
@@ -55,7 +55,7 @@ async function attach_debugger_if_needed(tab_id) {
 
 // Handle CDP events for dynamic authentication.
 chrome.debugger.onEvent.addListener(async (source, method, params) => {
-    let tab_id = source.tabId;
+    const tab_id = source.tabId;
 
     // Answer proxy authentication challenges with any stored credentials.
     if (method == "Fetch.authRequired") {
@@ -92,7 +92,7 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
 
 // Update global proxy configuration for dynamic per-tab PAC routing.
 function update_chrome_proxy_config() {
-    let pac_script = `
+    const pac_script = `
         function FindProxyForURL(url, host) {
             // Evaluated globally per connection request.
             return "DIRECT";
@@ -115,30 +115,30 @@ chrome.runtime.onMessage.addListener((message, sender, send_response) => {
         
         // Ensure state is loaded before modifying.
         state_loaded.then(async () => {
-            let tab_id = sender.tab.id;
-            let proxy_string = message.proxy_details;
+            const tab_id = sender.tab.id;
+            const proxy_string = message.proxy_details;
             
             try {
-                let url = new URL(proxy_string);
+                const url = new URL(proxy_string);
                 let proxy_type = url.protocol.replace(":", "").toLowerCase();
-                let host_name = url.hostname;
-                let port_num = parseInt(url.port, 10);
+                const host_name = url.hostname;
+                const port_num = parseInt(url.port, 10);
 
                 if (["http", "https", "socks5", "socks4"].includes(proxy_type) && host_name && port_num) {
-                    let proxy_config = {
+                    const proxy_config = {
                         type: proxy_type,
                         host: host_name,
                         port: port_num
                     };
 
-                    let tab_origin = new URL(sender.tab.url).origin;
+                    const tab_origin = new URL(sender.tab.url).origin;
                     tab_proxies[tab_id] = proxy_config;
                     origin_proxies[tab_origin] = proxy_config;
 
                     // Optional proxy auth, parsed as a "protocol://user:pass@host:port" proxy URL.
                     // If no credentials were passed, clear any previously stored ones for this tab/origin.
                     if (url.username) {
-                        let credentials = {
+                        const credentials = {
                             username: decodeURIComponent(url.username),
                             password: decodeURIComponent(url.password)
                         };

@@ -53,7 +53,8 @@ To help create fingerprint variation, the goal of this system is to support mult
 
 Current browsers that are supported (as a note right now it's only FireFox, I plan to add support for CDP browsers very soon). This is still just a work-in-progress.
 
-- FireFox. You can spawn as many pages as you want. Proxies are per tab, not linked to account.
+- Any CDP browser (encompasses the vast majority of the web browser market--including Chrome, Edge, Brave, Opera, and more).
+- FireFox. 
 
 ---
 

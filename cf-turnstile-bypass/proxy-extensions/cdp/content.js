@@ -1,5 +1,5 @@
 // Native toString spoof helper.
-let native_to_string = function toString() {
+const native_to_string = function toString() {
     return "function toString() { [native code] }";
 };
 
@@ -15,11 +15,11 @@ let native_to_string = function toString() {
         };
     }
 
-    let mock_match_media = function matchMedia(query) {
+    const mock_match_media = function matchMedia(query) {
         
         // Take the native MediaQueryList prototype, we will patch these properties, as
         // MediaQueryList is returned by matchMedia.
-        let query_string = typeof query === 'string' ? query : '';
+        const query_string = typeof query === 'string' ? query : '';
         
         // Map the top-level properties and event listeners to match the native object.
         return {
@@ -38,7 +38,7 @@ let native_to_string = function toString() {
     };
 
     // Spoof the string representations for the top-level matchMedia function.
-    let match_media_to_string = function toString() {
+    const match_media_to_string = function toString() {
         return "function matchMedia() { [native code] }";
     };
 
@@ -73,10 +73,10 @@ window.addEventListener("message", (event) => {
         
         // Spoof JS fields by injecting a script overriding the fields into the page.
         if (event.data.js_API_spoof_fields) {
-            let fields = event.data.js_API_spoof_fields;
+            const fields = event.data.js_API_spoof_fields;
             
             // Create an isolated data store hidden inside this specific closure to prevent global Symbol leaking.
-            let data_store = {};
+            const data_store = {};
 
             // Parse strings into primitive types if applicable.
             for (let key in fields) {
@@ -89,8 +89,8 @@ window.addEventListener("message", (event) => {
             for (let key in fields) {
                 data_store[key] = fields[key];
 
-                let parts = key.split(".");
-                let prop = parts.pop();
+                const parts = key.split(".");
+                const prop = parts.pop();
                 let obj = window;
 
                 for (let i = 0; i < parts.length; i++) {
@@ -108,17 +108,17 @@ window.addEventListener("message", (event) => {
                     descriptor = Object.getOwnPropertyDescriptor(proto, prop);
                     if (!descriptor) proto = Object.getPrototypeOf(proto);
                 }
-                let target_obj = proto || obj;
+                const target_obj = proto || obj;
 
                 // Check if we have already locked this property on a previous proxy setup.
                 if (!descriptor || !descriptor.get || !descriptor.get.___mocked) {
-                    let mock_get = function () { return data_store[key]; };
-                    let mock_set = function () {};
+                    const mock_get = function () { return data_store[key]; };
+                    const mock_set = function () {};
 
                     // Spoof the toString methods to perfectly mimic the native function strings that are returned
                     // by the JS when converting a native C++ function to its string representation.
-                    let native_get_to_string = function () { return "function get " + prop + "() { [native code] }"; };
-                    let native_set_to_string = function () { return "function set " + prop + "() { [native code] }"; };
+                    const native_get_to_string = function () { return "function get " + prop + "() { [native code] }"; };
+                    const native_set_to_string = function () { return "function set " + prop + "() { [native code] }"; };
 
                     // We set our string spoofs so it looks just like what untampered JS would to Cloudflare.
                     Object.defineProperty(mock_get, 'toString', { value: native_get_to_string, configurable: true, writable: true });
