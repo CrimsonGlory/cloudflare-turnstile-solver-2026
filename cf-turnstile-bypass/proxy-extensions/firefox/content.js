@@ -3,81 +3,12 @@ let native_to_string = function toString() {
     return "function toString() { [native code] }";
 };
 
-// Inject a script to ensure window.matchMedia always returns true on "matches".
-(function () {
-    // Spoof methods (e.g., addListener) where the listener is the 1st argument.
-    function create_legacy_mock(name) {
-        return function (listener) {
-            if (listener != null && typeof listener !== 'function' && typeof listener !== 'object') {
-                throw new TypeError(`Failed to execute '${name}' on 'MediaQueryList': parameter 1 is not of type 'Object'.`);
-            }
-        };
-    }
-
-    // Spoof methods (e.g., addEventListener) where the listener is the 2nd argument.
-    function create_modern_mock(name) {
-        return function (type, listener) {
-            if (listener != null && typeof listener !== 'function' && typeof listener !== 'object') {
-                throw new TypeError(`Failed to execute '${name}' on 'EventTarget': parameter 2 is not of type 'Object'.`);
-            }
-        };
-    }
-
-    let mock_match_media = function matchMedia(query) {
-        // Take the native MediaQueryList prototype, we will patch these properties, as
-        // MediaQueryList is returned by matchMedia.
-        let query_string = typeof query === 'string' ? query : '';
-        
-        // Map the top-level properties and event listeners to match the native object.
-        return {
-            // true
-            matches: true,
-            // query data
-            media: query_string,
-            // null
-            onchange: null,
-            addListener: create_legacy_mock('addListener'),
-            removeListener: create_legacy_mock('removeListener'),
-            addEventListener: create_modern_mock('addEventListener'),
-            removeEventListener: create_modern_mock('removeEventListener'),
-            dispatchEvent: function(event) { return true; } 
-        };
-    };
-
-    // Spoof the string representations for the top-level matchMedia function.
-    let match_media_to_string = function toString() {
-        return "function matchMedia() { [native code] }";
-    };
-
-    Object.defineProperty(mock_match_media, 'toString', {
-        value: match_media_to_string,
-        configurable: true,
-        writable: true,
-        enumerable: false
-    });
-
-    Object.defineProperty(mock_match_media.toString, 'toString', {
-        value: native_to_string,
-        configurable: true,
-        writable: true,
-        enumerable: false
-    });
-
-    // Bind the completed mock to the prototype.
-    Object.defineProperty(window, 'matchMedia', {
-        value: mock_match_media,
-        configurable: true,
-        writable: true
-    });
-})();
 
 window.addEventListener("message", (event) => {
-    
     // Data must come from our own webpage.
     if (event.source != window || !event.data) return;
 
     if (event.data.type == "SET_TAB_PROXY") {
-        
         // Spoof JS fields by injecting a script overriding the fields into the page.
         if (event.data.js_API_spoof_fields) {
             let fields = event.data.js_API_spoof_fields;
