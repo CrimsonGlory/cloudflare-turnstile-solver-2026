@@ -5,7 +5,6 @@ let native_to_string = function toString() {
 
 // Inject a script to ensure window.matchMedia always returns true on "matches".
 (function () {
-    
     // Spoof methods (e.g., addListener) where the listener is the 1st argument.
     function create_legacy_mock(name) {
         return function (listener) {
@@ -25,7 +24,6 @@ let native_to_string = function toString() {
     }
 
     let mock_match_media = function matchMedia(query) {
-        
         // Take the native MediaQueryList prototype, we will patch these properties, as
         // MediaQueryList is returned by matchMedia.
         let query_string = typeof query === 'string' ? query : '';
