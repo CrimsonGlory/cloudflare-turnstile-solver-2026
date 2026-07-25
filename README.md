@@ -242,7 +242,7 @@ if (packet.byteLength > 5) {
 
 ## Future Plans/What this Needs (may not be done, but if major updates do occur to this project it will likely be these).
 
-Custom navigator, webgl debug renderer, and window dimensions spoofing.
+Custom navigator, webGL debug renderer, and window dimensions spoofing.
 
 An automatic page-loader and harvester setup script may be created in order to aid with multi-proxy solving, as per page loads are currently needed for such.
 
