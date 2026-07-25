@@ -167,7 +167,7 @@ For any turnstile render call custom fields, such as "cData" or "action" as prev
 
 **Construct solve request packet:**
 
-```
+```javascript
 // proxy_idx = literally just the index of your proxy in the proxy list.
 // user_agent = user-agent string of the target you want to run (matches to navigator.userAgent). 
 // fields = object, { name: value, name2: value2, ... namen: valuen }. Names and values are strings.
