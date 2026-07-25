@@ -15,6 +15,7 @@ const state_loaded = chrome.storage.local.get([
     origin_proxies = res.origin_proxies || {};
     tab_proxy_credentials = res.tab_proxy_credentials || {};
     origin_proxy_credentials = res.origin_proxy_credentials || {};
+    update_chrome_proxy_config();
 });
 
 // Chromium service workers can idle. This will save our state before the script idles.
@@ -36,7 +37,6 @@ if (chrome.privacy && chrome.privacy.network && chrome.privacy.network.webRTCIPH
 // Attach CDP debugger session to a tab for proxy and authentication handling.
 async function attach_debugger_if_needed(tab_id) {
     if (attached_tabs.has(tab_id)) return;
-
     try {
         const target = { tabId: tab_id };
         await chrome.debugger.attach(target, "1.3");
@@ -59,7 +59,6 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
 
     // Answer proxy authentication challenges with any stored credentials.
     if (method == "Fetch.authRequired") {
-        
         // Wait for state to load from storage if the script is waking up.
         await state_loaded;
 
@@ -92,13 +91,27 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
 
 // Update global proxy configuration for dynamic per-tab PAC routing.
 function update_chrome_proxy_config() {
+    let pac_rules = [];
+
+    for (const [origin, config] of Object.entries(origin_proxies)) {
+        try {
+            const host = new URL(origin).hostname;
+            let scheme = "PROXY";
+            if (config.type === "socks5") scheme = "SOCKS5";
+            else if (config.type === "socks4") scheme = "SOCKS";
+            else if (config.type === "https") scheme = "HTTPS";
+
+            pac_rules.push(`if (dnsDomainIs(host, "${host}") || host === "${host}") return "${scheme} ${config.host}:${config.port}";`);
+        } catch (e) {}
+    }
+
     const pac_script = `
         function FindProxyForURL(url, host) {
-            // Evaluated globally per connection request.
+            ${pac_rules.join('\n            ')}
             return "DIRECT";
         }
     `;
-    
+
     // Configures Chrome's proxy settings.
     chrome.proxy.settings.set({
         value: {
@@ -111,8 +124,7 @@ function update_chrome_proxy_config() {
 
 // Listen to messages posted by the client if we want to set up a proxy.
 chrome.runtime.onMessage.addListener((message, sender, send_response) => {
-    if (message.action == "setup_proxy" && sender.tab) {
-        
+    if (message.action == "setup_proxy" && sender.tab) { 
         // Ensure state is loaded before modifying.
         state_loaded.then(async () => {
             const tab_id = sender.tab.id;
@@ -153,6 +165,7 @@ chrome.runtime.onMessage.addListener((message, sender, send_response) => {
                     }
 
                     save_state();
+                    update_chrome_proxy_config();
                     send_response({ success: true });
                 } else {
                     send_response({ success: false });
@@ -169,7 +182,6 @@ chrome.runtime.onMessage.addListener((message, sender, send_response) => {
 
 // Clean up state and detach debugger on tab close.
 chrome.tabs.onRemoved.addListener(async (tab_id) => {
-    
     // Ensure the state is loaded before modifying.
     await state_loaded;
 
@@ -191,5 +203,8 @@ chrome.tabs.onRemoved.addListener(async (tab_id) => {
         state_changed = true;
     }
 
-    if (state_changed) save_state();
+    if (state_changed) {
+        save_state();
+        update_chrome_proxy_config();
+    }
 });

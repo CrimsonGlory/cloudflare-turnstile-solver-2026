@@ -6,6 +6,7 @@
   "permissions": [
     "debugger",
     "privacy",
+    "proxy",
     "storage",
     "tabs",
     "webRequest"
@@ -19,9 +20,15 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["content_main.js"],
       "run_at": "document_start",
       "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content_isolated.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
     }
   ]
 }
