@@ -51,8 +51,6 @@ What this method IS viable for, though, is solving repeated instances of Cloudfl
 
 To help create fingerprint variation, the goal of this system is to support multiple browsers (i.e. they have a proxy connector extension).
 
-Current browsers that are supported (as a note right now it's only FireFox, I plan to add support for CDP browsers very soon). This is still just a work-in-progress.
-
 - Any CDP browser (encompasses the vast majority of the web browser market--including Chrome, Edge, Brave, Opera, and more).
 - FireFox. 
 
