@@ -199,7 +199,7 @@ function construct_solver_request_packet(proxy_idx, user_agent = "", fields = {}
 
 **Parse token response packet:**
 
-```
+```javascript
 // packet = packet buffer.
 function parse_token_response_packet(packet) {
     let view = new DataView(packet);
@@ -215,7 +215,7 @@ function parse_token_response_packet(packet) {
 
 **Parse available solvers packet:**
 
-```
+```javascript
 // packet = packet buffer.
 function parse_available_solvers_count_packet(packet) {
     let view = new DataView(packet);
@@ -225,7 +225,7 @@ function parse_available_solvers_count_packet(packet) {
 
 **Match packets:**
 
-```
+```javascript
 // packet = packet buffer
 if (packet.byteLength > 5) {
    // Token Packet
