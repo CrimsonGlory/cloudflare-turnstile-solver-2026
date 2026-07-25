@@ -265,8 +265,6 @@ Support (extensions) for more browsers.
 
 Canvas fingerprint spoofing to match given hardware specs.
 
-Bypass chlPageData turnstile fields (data from an extra challenge page that isn't implemented for most sites using turnstile, but good for being thorough).
-
 An automatic page-loader and harvester setup script may be created in order to aid with multi-proxy solving, as per page loads are currently needed for such.
 
 If a feasible solution is found, a way to tunnel individual iframes (hence enhancing multi-proxy solving outside of just different tabs) may be implemented.
