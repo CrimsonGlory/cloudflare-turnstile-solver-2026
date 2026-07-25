@@ -277,8 +277,4 @@ All contributions are very welcome. If you have a way to improve this project, p
 
 ---
 
-## Some Images and Media of Applications
-
-<img width="1919" height="942" alt="image" src="https://github.com/user-attachments/assets/bd5b88a4-b824-4591-832e-812e254adb68" />
-https://github.com/user-attachments/assets/dfca651a-e13c-47f7-8d54-80b029a4983b
-<img width="1919" height="1001" alt="image" src="https://github.com/user-attachments/assets/48ce3a79-d111-4838-b845-88c62b2144f8" />
+## Some Images and Media of Applications (will be added soon, after support for a variety of browsers has been integrated)
