@@ -9,7 +9,8 @@
     "webRequest",
     "webRequestBlocking",
     "webRequestAuthProvider",
-    "privacy"
+    "privacy",
+    "storage"
   ],
   "host_permissions": [
     "<all_urls>"

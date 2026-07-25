@@ -14,6 +14,8 @@ use screenshots::Screen;
 use rand::Rng;
 
 // Some config to aid with detection.
+// Note that though these are decent config values, depending on your specific graphics rendering these could require adjustment.
+// You'll have to check for yourself, you can run this on any website with turnstile and see what config you need to detect the checkbox.
 
 // Minimum area of the interior checkbox rect.
 const MIN_INTERIOR_AREA: u32 = 200;

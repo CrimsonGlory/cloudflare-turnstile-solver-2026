@@ -187,6 +187,7 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<State>>) {
             }
 
             // Request to receive all currently available solvers. Useful for checking how many solver instances you can spawn.
+            // Planning to restructure this so it logs all solvers per ua. 
             // [3]
             3 => {
                 let s = state.lock().await;
