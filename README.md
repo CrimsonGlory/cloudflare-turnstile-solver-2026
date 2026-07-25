@@ -156,9 +156,29 @@ The extensions allow us to utilize browser proxy API capabilities to connect to 
 
 For each browser you'll be using, you'll need to add the respective extension for that browser from `proxy-extensions` to whatever browser you are using (ex. firefox for firefox, cdp for cdp browsers, truly a shocker), and run it. These extensions provide the API necessary for asynchronous proxy connections, allowing you to await and connect to a proxy before continuing execution. 
 
-**How it works:**
+## How It Works
 
-Each extension listens for a `window.postMessage` to `SET_TAB_PROXY`. This post by the client (which solvers use), passes in the target proxy, and addiitonal JS field data you'd like to spoof (see details on structuring field data for packets in the token server section). The extension can then spoof this JS APIs for the fields you selected, and also then effectively connect to a proxy or store its data (this depends on the browser, browser protocols vary so there's a few approaches to this), and then either it's connected to the proxy, so any request made is proxied, OR requests are listened for, and then the proxy details are applied to requests that are made. Also, **WebRTC host peeking/STUN search features are disabled by these extensions**, meaning WebRTC host ip leaks are blocked while still keeping WebRTC itself enabled. Upon the proxy having fully connected, the system will send back a `PROXY_READY` result, which allows for our solvers to fully await proxy connection before continuing execution. The JS apis are spoofed by overriding native prototypes, and use a hidden Symbol key reference so we can point to a modifiable symbol entry for spoofed data, having a modifiable symbol to point to allows us to still be able to reset the data ourselves, which is critical for our script to be able to overwrite fields with new values without breaking, while still not allowing Cloudflare to access any spoof metrics.
+Each extension acts as a bridge for proxy routing and fingerprint spoofing, driven by `window.postMessage` events. The steps to the execution flow are detailed below:
+
+1. **Initialization**
+   The extension listens for a `SET_TAB_PROXY` message sent by the client (which our solvers use). This payload contains the target proxy details and the specific JavaScript field data you want to spoof. *(Note: See the token server section for details on structuring this field data).*
+
+2. **Proxy Routing**
+   The extension applies the requested proxy. Because protocols vary by browser, this is handled in one of two ways: it either establishes a direct proxy connection for the tab, or it actively listens for outgoing requests and applies the proxy details to them on the fly.
+
+3. **JS API Spoofing**
+   The requested JavaScript APIs are spoofed by overriding native prototypes. This is done using a hidden Symbol key reference pointing to a modifiable entry. This architecture is critical: it allows our script to dynamically overwrite fields with new values without breaking the page, while completely hiding the spoofing metrics from anti-bot systems like Cloudflare.
+
+4. **WebRTC Leak Prevention**
+   To maintain operational security, WebRTC host peeking and STUN search features are disabled. This strictly blocks WebRTC host IP leaks while keeping standard WebRTC functionality enabled.
+
+5. **`matchMedia` Protection**
+   `matchMedia`, a method that runs on the CSS engine, can get your real window dimensions if you spoof standard JS window dimension values. It can check and compare values like `width`/`min-width`/`max-width`, or `height`/`min-height`/`max-height`. `matchMedia` returns data in a `matches` property of the response structure, which is a boolean determining if the given query matches or aligns with the actual session's data. 
+
+   If you provide `window.innerWidth` and `window.innerHeight` fields (though to fully spoof well, you'll need to spoof other fields—these just trigger the feature, as mediaQuery compares all pixel data in relation to those dimensions), `matchMedia` will be spoofed. For width and height checks, it will force the `matches` field to output the exact result it would give if your window were actually the dimensions of your spoofed `window.innerWidth` and `window.innerHeight`.
+
+6. **Execution Readiness**
+   Once the proxy is fully connected and the environment is secured, the extension sends a `PROXY_READY` message back to the client. This allows solvers to securely await a confirmed proxy connection before continuing their execution.
 
 ---
 
