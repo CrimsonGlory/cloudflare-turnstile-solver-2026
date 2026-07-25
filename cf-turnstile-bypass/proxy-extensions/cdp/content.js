@@ -8,7 +8,6 @@ window.addEventListener("message", (event) => {
     if (event.source != window || !event.data) return;
 
     if (event.data.type == "SET_TAB_PROXY") {
-        
         // Spoof JS fields by injecting a script overriding the fields into the page.
         if (event.data.js_API_spoof_fields) {
             let fields = event.data.js_API_spoof_fields;
