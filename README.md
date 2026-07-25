@@ -1,6 +1,6 @@
 # cloudflare-turnstile-solver-2026
 
-A proof-of-concept Cloudflare Turnstile bypass system built in Rust. Includes a token harvesting mechanism comprising a widget generator, a proxy managing extension, a Turnstile checkbox clicker, and a token server for receiving and managing solved tokens. No API service required. 
+A proof-of-concept Cloudflare Turnstile bypass system built with Rust and JavaScript. Includes a token harvesting mechanism comprising a widget generator, a proxy managing extension, a Turnstile checkbox clicker, and a token server for receiving and managing solved tokens. No API service required. 
 
 ---
 
