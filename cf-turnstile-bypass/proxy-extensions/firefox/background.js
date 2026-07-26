@@ -16,7 +16,7 @@ let state_loaded = browser.storage.local.get([
     origin_proxy_credentials = res.origin_proxy_credentials || {};
 });
 
-// Chromium service workers can idle. This will save our state before the script idles.
+// Firefox Manifest V3 background scripts suspend when idle. This saves our state before the script sleeps.
 function save_state() {
     browser.storage.local.set({
         tab_proxies,
@@ -32,9 +32,12 @@ if (browser.privacy && browser.privacy.network && browser.privacy.network.webRTC
     browser.privacy.network.webRTCIPHandlingPolicy.set({ value: "default_public_interface_only" });
 }
 
-// Handle proxy routing dynamically via Firefox's native API (Replaces PAC script).
+// Handle proxy routing dynamically via Firefox's native API.
 browser.proxy.onRequest.addListener(
-    (requestDetails) => {
+    async (requestDetails) => {
+        // Ensure state has resolved before attempting to pull proxy data on wakeup.
+        await state_loaded; 
+        
         let tab_id = requestDetails.tabId;
         
         if (tab_proxies[tab_id]) {
@@ -53,9 +56,12 @@ browser.proxy.onRequest.addListener(
     { urls: ["<all_urls>"] }
 );
 
-// Answer proxy authentication challenges with any stored credentials natively (Replaces CDP).
+// Answer proxy authentication challenges natively with stored credentials.
 browser.webRequest.onAuthRequired.addListener(
-    (details) => {
+    async (details) => {
+        // Ensure state has resolved before attempting to pull auth data on wakeup.
+        await state_loaded; 
+
         if (!details.isProxy) return;
 
         let tab_id = details.tabId;
@@ -84,10 +90,11 @@ browser.webRequest.onAuthRequired.addListener(
 );
 
 // Listen to messages posted by the client if we want to set up a proxy.
-browser.runtime.onMessage.addListener((message, sender, send_response) => {
+browser.runtime.onMessage.addListener((message, sender) => {
     if (message.action == "setup_proxy" && sender.tab) {
-        // Ensure state is loaded before modifying.
-        state_loaded.then(async () => {
+        
+        // Return the Promise directly to respond asynchronously in MV3
+        return state_loaded.then(async () => {
             let tab_id = sender.tab.id;
             let proxy_string = message.proxy_details;
             
@@ -99,7 +106,7 @@ browser.runtime.onMessage.addListener((message, sender, send_response) => {
 
                 if (["http", "https", "socks5", "socks4", "socks"].includes(proxy_type) && host_name && port_num) {
                     
-                    // Firefox native API expects 'socks' instead of 'socks5'
+                    // Firefox's proxy API expects 'socks' instead of 'socks5'.
                     if (proxy_type === "socks5") proxy_type = "socks";
                     
                     let proxy_config = {
@@ -110,12 +117,11 @@ browser.runtime.onMessage.addListener((message, sender, send_response) => {
 
                     let tab_origin = new URL(sender.tab.url).origin;
                     
-                    // Firefox proxy API requires objects inside an array
+                    // Firefox's proxy API requires objects inside an array.
                     tab_proxies[tab_id] = [proxy_config];
                     origin_proxies[tab_origin] = [proxy_config];
 
                     // Optional proxy auth, parsed as a "protocol://user:pass@host:port" proxy URL.
-                    // If no credentials were passed, clear any previously stored ones for this tab/origin.
                     if (url.username) {
                         let credentials = {
                             username: decodeURIComponent(url.username),
@@ -129,28 +135,25 @@ browser.runtime.onMessage.addListener((message, sender, send_response) => {
                     }
 
                     save_state();
-                    send_response({ success: true });
+                    return { success: true };
                 } else {
-                    send_response({ success: false });
+                    return { success: false };
                 }
             } catch (err) {
                 console.error("[Proxy Bridge] Error parsing proxy URL:", err);
-                send_response({ success: false });
+                return { success: false };
             }
         });
-        return true;
     }
     return false;
 });
 
 // Clean up state and detach proxy mapping on tab close.
 browser.tabs.onRemoved.addListener(async (tab_id) => {
-    // Ensure the state is loaded before modifying.
     await state_loaded;
 
     let state_changed = false;
     if (tab_proxies[tab_id]) {
-        console.log(`[Proxy Bridge] Tab ${tab_id} closed. Clearing proxy mapping.`);
         delete tab_proxies[tab_id];
         state_changed = true;
     }

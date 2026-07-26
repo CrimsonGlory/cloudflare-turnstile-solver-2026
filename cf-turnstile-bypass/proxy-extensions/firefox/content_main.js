@@ -3,6 +3,20 @@ let native_to_string = function toString() {
     return "function toString() { [native code] }";
 };
 
+// Generate hidden symbol references to keep tracking invisible to the page's JS environment.
+const SPOOF_SYMBOL = Symbol("spoof_indicator");
+const STORE_SYMBOL = Symbol("spoof_store");
+
+// Store field overrides on window using a non-enumerable descriptor.
+if (!window[STORE_SYMBOL]) {
+    Object.defineProperty(window, STORE_SYMBOL, {
+        value: {},
+        writable: false,
+        enumerable: false,
+        configurable: false
+    });
+}
+
 window.addEventListener("message", (event) => {
     // Data must come from our own webpage.
     if (event.source != window || !event.data) return;
@@ -11,9 +25,7 @@ window.addEventListener("message", (event) => {
         // Spoof JS fields by injecting a script overriding the fields into the page.
         if (event.data.js_API_spoof_fields) {
             let fields = event.data.js_API_spoof_fields;
-            
-            // Create an isolated data store hidden inside this specific closure to prevent global Symbol leaking.
-            let data_store = {};
+            let data_store = window[STORE_SYMBOL];
 
             // Parse strings into primitive types if applicable.
             for (let key in fields) {
@@ -37,8 +49,7 @@ window.addEventListener("message", (event) => {
                     obj = obj[parts[i]];
                 }
 
-                // Locate the true prototype object, this ensures we don't apply our modifications
-                // to the wrong instance.
+                // Locate the true prototype object to ensure correct application.
                 let proto = obj;
                 let descriptor = null;
                 while (proto && !descriptor) {
@@ -47,23 +58,22 @@ window.addEventListener("message", (event) => {
                 }
                 let target_obj = proto || obj;
 
-                // Check if we have already locked this property on a previous proxy setup.
-                if (!descriptor || !descriptor.get || !descriptor.get.___mocked) {
-                    let mock_get = function () { return data_store[key]; };
+                // Check if we have already locked this property on a previous proxy setup using our hidden Symbol.
+                if (!descriptor || !descriptor.get || !descriptor.get[SPOOF_SYMBOL]) {
+                    let mock_get = function () { return window[STORE_SYMBOL][key]; };
                     let mock_set = function () {};
 
-                    // Spoof the toString methods to perfectly mimic the native function strings that are returned
-                    // by the JS when converting a native C++ function to its string representation.
                     let native_get_to_string = function () { return "function get " + prop + "() { [native code] }"; };
                     let native_set_to_string = function () { return "function set " + prop + "() { [native code] }"; };
 
-                    // We set our string spoofs so it looks just like what untampered JS would to Cloudflare.
+                    // Set string spoofs to look like untampered JS to Cloudflare.
                     Object.defineProperty(mock_get, 'toString', { value: native_get_to_string, configurable: true, writable: true });
                     Object.defineProperty(mock_set, 'toString', { value: native_set_to_string, configurable: true, writable: true });
                     Object.defineProperty(mock_get.toString, 'toString', { value: native_to_string, configurable: true, writable: true });
                     Object.defineProperty(mock_set.toString, 'toString', { value: native_to_string, configurable: true, writable: true });
 
-                    mock_get.___mocked = true;
+                    // Tag the mock using our hidden symbol.
+                    mock_get[SPOOF_SYMBOL] = true;
 
                     Object.defineProperty(target_obj, prop, {
                         get: mock_get,
@@ -74,16 +84,16 @@ window.addEventListener("message", (event) => {
                 }
             }
 
-            // matchMedia protection implementation. This only triggers if we have set spoofed window inner dimensions.
+            // matchMedia protection implementation. Triggers if spoofed window inner dimensions are set.
             if (data_store['window.innerWidth'] !== undefined || data_store['window.innerHeight'] !== undefined) {
                 let orig_matchMedia = window.matchMedia;
                 
-                if (!orig_matchMedia.___mocked) {
+                if (!orig_matchMedia[SPOOF_SYMBOL]) {
                     let mock_matchMedia = function matchMedia(query) {
                         let mql = orig_matchMedia.call(this, query);
                         
-                        let w = data_store['window.innerWidth'];
-                        let h = data_store['window.innerHeight'];
+                        let w = window[STORE_SYMBOL]['window.innerWidth'];
+                        let h = window[STORE_SYMBOL]['window.innerHeight'];
                         
                         let is_match = true;
                         let has_dimension_check = false;
@@ -109,7 +119,7 @@ window.addEventListener("message", (event) => {
                             if (type == 'max-height' && h > val) is_match = false;
                         }
                         
-                        // Only override the match result IF it is a dimension check.
+                        // Override match result IF it is a dimension check.
                         if (has_dimension_check) {
                             Object.defineProperty(mql, 'matches', {
                                 get: function() { return is_match; },
@@ -121,12 +131,11 @@ window.addEventListener("message", (event) => {
                         return mql;
                     };
                     
-                    // Spoof toStrings here so it looks like actual native, untampered JS.
                     let native_matchMedia_to_string = function () { return "function matchMedia() { [native code] }"; };
                     Object.defineProperty(mock_matchMedia, 'toString', { value: native_matchMedia_to_string, configurable: true, writable: true });
                     Object.defineProperty(mock_matchMedia.toString, 'toString', { value: native_to_string, configurable: true, writable: true });
                     
-                    mock_matchMedia.___mocked = true;
+                    mock_matchMedia[SPOOF_SYMBOL] = true;
                     
                     Object.defineProperty(window, 'matchMedia', {
                         value: mock_matchMedia,

@@ -1,15 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "CDP Proxy & Spoof Extension",
+  "name": "Chrome Proxy Bridge & Spoof Engine",
   "version": "1.0",
-  "description": "CDP Implementation of this extension.",
+  "description": "Bridges webpage proxy requests, blocks WebRTC probing, and allows for JS API spoofs.",
   "permissions": [
-    "debugger",
     "privacy",
     "proxy",
     "storage",
     "tabs",
-    "webRequest"
+    "webRequest",
+    "webRequestBlocking"
   ],
   "host_permissions": [
     "<all_urls>"
