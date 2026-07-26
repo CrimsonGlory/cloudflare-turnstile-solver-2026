@@ -172,12 +172,12 @@ Each extension acts as a bridge for proxy routing and fingerprint spoofing, driv
 4. **WebRTC Leak Prevention**
    To maintain operational security, WebRTC host peeking and STUN search features are disabled. This strictly blocks WebRTC host IP leaks while keeping standard WebRTC functionality enabled.
 
-5. **`matchMedia` Protection**
+5. **matchMedia Protection**
    `matchMedia`, a method that runs on the CSS engine, can get your real window dimensions if you spoof standard JS window dimension values. It can check and compare values like `width`/`min-width`/`max-width`, or `height`/`min-height`/`max-height`. `matchMedia` returns data in a `matches` property of the response structure, which is a boolean determining if the given query matches or aligns with the actual session's data. 
 
    If you provide `window.innerWidth` and `window.innerHeight` fields (though to fully spoof well, you'll need to spoof other fields—these just trigger the feature, as mediaQuery compares all pixel data in relation to those dimensions), `matchMedia` will be spoofed. For width and height checks, it will force the `matches` field to output the exact result it would give if your window were actually the dimensions of your spoofed `window.innerWidth` and `window.innerHeight`.
 
-6. **Execution Readiness**
+7. **Execution Readiness**
    Once the proxy is fully connected and the environment is secured, the extension sends a `PROXY_READY` message back to the client. This allows solvers to securely await a confirmed proxy connection before continuing their execution.
 
 ---
