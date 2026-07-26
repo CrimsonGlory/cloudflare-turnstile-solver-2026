@@ -26,7 +26,7 @@ if (chrome.privacy && chrome.privacy.network && chrome.privacy.network.webRTCIPH
 chrome.webRequest.onAuthRequired.addListener(
     (details, callback) => {
         if (!details.isProxy) {
-            callback({ cancel: false });
+            callback({});
             return;
         }
 
@@ -40,11 +40,11 @@ chrome.webRequest.onAuthRequired.addListener(
                     }
                 });
             } else {
-                callback({ cancel: false });
+                callback({});
             }
         }).catch((err) => {
             console.error("[Proxy Bridge] Error loading credentials:", err);
-            callback({ cancel: false });
+            callback({});
         });
     },
     { urls: ["<all_urls>"] },
@@ -104,7 +104,7 @@ chrome.runtime.onMessage.addListener((message, sender, send_response) => {
                     };
                 } else {
                     active_credentials = null;
-                };
+                }
 
                 save_state();
                 update_chrome_proxy_config();
