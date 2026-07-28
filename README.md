@@ -284,7 +284,7 @@ Support (extensions) for more browsers.
 
 Canvas fingerprint spoofing to match given hardware specs.
 
-An automatic page-loader and harvester setup script may be created in order to aid with multi-proxy solving, as per page loads are currently needed for such.
+Automatic, headless page loading with adocker. Plus Devtools protocol level overriding so standard overrides aren't required.
 
 If a feasible solution is found, a way to tunnel individual iframes (hence enhancing multi-proxy solving outside of just different tabs) may be implemented.
 
