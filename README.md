@@ -106,7 +106,9 @@ While the video does not show it, the backend, plus a check on the game itself, 
 
 This shows a real case of application, but remember that more solvers can be used than just 5 for sure, as long as your device is even somewhat decent, and that this system can be split across multiple devices (which would obviously greatly improve performance and framing capabilities).
 
-Anyways, this video shows the general idea of the system (all farmed tokens are sent to the backend for use), and proves the claim that you can generate a few hundred tokens in only a few minutes--on a singular device, and while using that device to execute INTENSE sustained, backend logic (such as also actively supporting 200 WebSockets for a game with a lot of traffic) at the same time.
+Anyways, this video shows the general idea of the system (all farmed tokens are sent to the backend for use), and proves the claim that you can generate a few hundred tokens in only a few minutes--on a singular device, and while using that device to execute INTENSE sustained, backend logic (such as also actively supporting 200 WebSockets for a game with a lot of traffic) at the same time. Plus, the pattern used to solve tokens was ridiculously simple, and not complex. Perhaps with even better browser solve orders and spoof fields this can be further improved.
+
+**I will also get and mark down more specific benchmarks later, with all the spoof fields I used, and no intensely active backend, but I will make it trigger a siteverify so we can analyze how many tokens actually succeeded (appears to be near 100%, if not 100%). But yeah since that was also running 200 high traffic WebSockets in the background, and I didn't actually take any benchmark metrics anyways besides total sockets, I will get actual benchmark metrics for expected solving times when mainly solvers are just running on this device. So expect benchmarks with improved results at some point in the future (soon).**
 
 ---
 
