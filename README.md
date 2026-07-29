@@ -99,18 +99,14 @@ This method is extremely effective when it comes to token harvesting. Even witho
 
 ## Media of Applications
 
-YouTube video showing a real application case of it being used to actively spawn a few hundred high traffic WebSockets in a game (on the backend), while running these solvers at the same time:
+YouTube video showing a real application case of it being used to actively spawn a few hundred high traffic WebSockets in a web game (on the backend), while running these solvers at the same time:
 https://www.youtube.com/watch?v=SkFIWGpzllE
 
-Forgot to take a picture of when it was at approximately 200, but here is a picture of the game menu selector this was used on to show the extensively filled lobby. A zero player lobby was chosen for this game so it'd be as accurate as possible:
-<img width="717" height="343" alt="image" src="https://github.com/user-attachments/assets/00e1bfe5-4297-4a4b-85ce-7b65919fa3ff" />
-
-
-Note in that video, socket connections using the verified tokens were actively sustained and running the background, which generated A LOT of traffic. This used up a lot of network, and since I ran both the sockets and the solvers on one device, the solvers were not necessarily idealized. Because of this that video will not be used for a benchmark. Just to provide a rough idea though, in those five minutes--with only 5 solvers (and a amount of sockets increasing with the amount of tokens) 200 tokens were generated. Note that there was not one fail, all approximately 200 of those tokens went through as valid when used with siteverify to actually generate the socket bot.
+While the video does not show it, the backend, plus a check on the game itself, verified that there were 200 active bots in a game that generates a lot of WebSocket traffic WHILE these solvers were running. Those sockets alone add extreme network stress onto the system. Running this with the solvers at the same time is even more insane. 
 
 This shows a real case of application, but remember that more solvers can be used than just 5 for sure, as long as your device is even somewhat decent, and that this system can be split across multiple devices (which would obviously greatly improve performance and framing capabilities).
 
-Still, this video shows the general idea of the system (all farmed tokens are sent to the backend for use), and proves the claim that you can generate a few hundred tokens in only a few minutes--on a singular device, and while using that device to execute INTENSE sustained, backend logic (such as also actively supporting 200 WebSockets for a game with a lot of traffic) at the same time.
+Anyways, this video shows the general idea of the system (all farmed tokens are sent to the backend for use), and proves the claim that you can generate a few hundred tokens in only a few minutes--on a singular device, and while using that device to execute INTENSE sustained, backend logic (such as also actively supporting 200 WebSockets for a game with a lot of traffic) at the same time.
 
 ---
 
