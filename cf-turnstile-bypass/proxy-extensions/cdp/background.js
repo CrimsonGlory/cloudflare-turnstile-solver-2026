@@ -22,7 +22,6 @@ if (chrome.privacy && chrome.privacy.network && chrome.privacy.network.webRTCIPH
 }
 
 // Answer proxy authentication challenges natively with stored credentials.
-// FIXED: Using asyncBlocking and awaiting state_loaded to survive Service Worker idle suspensions.
 chrome.webRequest.onAuthRequired.addListener(
     (details, callback) => {
         if (!details.isProxy) {
