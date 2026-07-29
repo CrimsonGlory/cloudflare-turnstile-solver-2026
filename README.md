@@ -99,8 +99,12 @@ This method is extremely effective when it comes to token harvesting. Even witho
 
 ## Media of Applications
 
-YouTube video showing a real application case:
+YouTube video showing a real application case of it being used to actively spawn a few hundred high traffic WebSockets in a game (on the backend), while running these solvers at the same time:
 https://www.youtube.com/watch?v=SkFIWGpzllE
+
+Forgot to take a picture of when it was at approximately 200, but here is a picture of the game menu selector this was used on to show the extensively filled lobby. A zero player lobby was chosen for this game so it'd be as accurate as possible:
+<img width="717" height="343" alt="image" src="https://github.com/user-attachments/assets/00e1bfe5-4297-4a4b-85ce-7b65919fa3ff" />
+
 
 Note in that video, socket connections using the verified tokens were actively sustained and running the background, which generated A LOT of traffic. This used up a lot of network, and since I ran both the sockets and the solvers on one device, the solvers were not necessarily idealized. Because of this that video will not be used for a benchmark. Just to provide a rough idea though, in those five minutes--with only 5 solvers (and a amount of sockets increasing with the amount of tokens) 200 tokens were generated. Note that there was not one fail, all approximately 200 of those tokens went through as valid when used with siteverify to actually generate the socket bot.
 
