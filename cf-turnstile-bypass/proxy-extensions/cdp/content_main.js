@@ -19,7 +19,7 @@ if (!window[STORE_SYMBOL]) {
 
 window.addEventListener("message", (event) => {
     // Data must come from our own webpage.
-    if (event.source !== window || !event.data) return;
+    if (event.source != window || !event.data) return;
 
     if (event.data.type == "SET_TAB_PROXY") {
         // Spoof JS fields by injecting a script overriding the fields into the page.
@@ -32,7 +32,7 @@ window.addEventListener("message", (event) => {
                 let val = fields[key];
                 if (val === "true") fields[key] = true;
                 else if (val === "false") fields[key] = false;
-                else if (typeof val === "string" && val.trim() !== "" && !isNaN(Number(val))) fields[key] = Number(val);
+                else if (typeof val === "string" && val.trim() != "" && !isNaN(Number(val))) fields[key] = Number(val);
             }
 
             for (let key in fields) {
@@ -85,7 +85,7 @@ window.addEventListener("message", (event) => {
             }
 
             // matchMedia protection implementation. Triggers if spoofed window inner dimensions are set.
-            if (data_store['window.innerWidth'] !== undefined || data_store['window.innerHeight'] !== undefined) {
+            if (data_store['window.innerWidth'] != undefined || data_store['window.innerHeight'] != undefined) {
                 let orig_matchMedia = window.matchMedia;
                 
                 if (!orig_matchMedia[SPOOF_SYMBOL]) {
@@ -104,7 +104,7 @@ window.addEventListener("message", (event) => {
                             has_dimension_check = true;
                             let type = w_match[1];
                             let val = parseInt(w_match[2], 10);
-                            if (type == 'width' && w !== val) is_match = false;
+                            if (type == 'width' && w != val) is_match = false;
                             if (type == 'min-width' && w < val) is_match = false;
                             if (type == 'max-width' && w > val) is_match = false;
                         }
@@ -114,7 +114,7 @@ window.addEventListener("message", (event) => {
                             has_dimension_check = true;
                             let type = h_match[1];
                             let val = parseInt(h_match[2], 10);
-                            if (type == 'height' && h !== val) is_match = false;
+                            if (type == 'height' && h != val) is_match = false;
                             if (type == 'min-height' && h < val) is_match = false;
                             if (type == 'max-height' && h > val) is_match = false;
                         }
