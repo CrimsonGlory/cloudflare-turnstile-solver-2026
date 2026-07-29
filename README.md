@@ -25,7 +25,8 @@ A proof-of-concept Cloudflare Turnstile bypass system built with Rust and JavaSc
 
 | Major |
 | :--- |
-| The solver is **not headless** — a GUI is required. |
+| The solver is **not headless** — a GUI is required. With dockerization this could be fixed. |
+| Currently must manually open up tabs, though with dockerization this could also be fixed. |
 | Ineffective for general, random web-scraping. Knowing the websites it will be used on is most effective. |
 | No custom fingerprint spoofing for TLS/JA4, canvas, and other metrics like navigator values. But, given the legitimacy of the browsers, this isn't as severe as usual. |
 
@@ -52,7 +53,42 @@ What this method IS viable for, though, is solving repeated instances of Cloudfl
 To help create fingerprint variation, the goal of this system is to support multiple browsers (i.e. they have a proxy connector extension).
 
 - Any CDP browser (encompasses the vast majority of the web browser market--including Chrome, Edge, Brave, Opera, and more).
-- FireFox. 
+- FireFox.
+
+---
+
+## Latency, Throughput, Overall Effectiveness
+
+This method's primary goal is to token harvest on a specific site. Hence, it's objective is not to just open a site as previously stated. The goal is to generate as many tokens as possible.
+
+This requires the maximization of two metrics
+
+- Latency (time for a single solver to fully complete the captcha, return token back to requester)
+- Throughput (latency scaled by the actual amount of workers that are solving tokens)
+
+### Latency
+
+This project effectively minimizes the latency, or time for a single solver to solve the token. A few things contribute to this fact:
+- Because the method is single site harvesting, no page redirect, or entirely new page loading is required.
+- The override token solver file strips away unnecessary html elements. You are left with a black background and the widget in in iframe.
+- Real browser fingerprints result in short challenges that take only seconds to go through. The time for a Cloudflare Turnstile challenge to go through takes only a few seconds at most. In general, you'll see results of even under two seconds.
+- Pipeline of token transfer through solver -> token server -> reciever/backend is extremely fast.
+- Effectively, the approximate latency for a single solver to get a token to a reciever is:
+T_solver_recieve_challenge + T_solver_load_widget + T_solver_solve_widget + T_to_bounce_back_to_reciever ~ T_solver_solve_widget ~ 1-2s.
+
+This is one of the most effective latencies possible, as it is effectively limited by the time it takes the browser to actually complete the Cloudflare challenge. The only way to even improve the speed on such would be a truly headless, full interaction scheme that could interaction with the turnstile challenge API fully, which is obviously not a feasible method as it would quickly break without much maintenance.
+
+### Throughput
+
+Throughput on this project is also great. In particular, you can easily spawn multiple browsers, including different browsers (as long as they are supported), and because the solve time for a single token usually is under two seconds, even if you spawn, say, only six browsers (a setup I have used is Chrome + Edge + FireFox + Brave + Opera + Opera GX for example), this can easily rack up to a few hundred tokens in only a minute of time. 
+
+Note that this is also on a singular device. If expanded to multiple devices (since the system relies on the token server, this can easily be done), this throughput only increases.
+
+The only issue regarding throughput right now, and also mass automation, is this system's requirement of manually loading tabs to solve this. The pixel checkbox click detection makes it so that browser tabs cannot overlap and block each others UIs. This does effectively limit the number of solvers you can have as browser dimensions depend on this. That said, at the moment you can still get at the bare minimum, with no placement optimization, 5 browsers even with an average sized monitor. You can easily quickly solve for hundreds of tokens with this still. 
+
+As previously mentioned, dockering this method could solve this issue. This was originally intended as a PoC but turned out to be extremely effective, so I have thought about doing this. I am relatively busy though, but if I have time in the future and want to do this, I may work on dockering this project. This would allow for both headless and also running many more tabs without UI overlap issues. This would effectively maximize the throughput possible with this method.
+
+Still, as explained, throughput is very high, particularly due to the extremely low latency combined with the fact you can still easily get multiple solvers up. 
 
 ---
 
@@ -285,9 +321,9 @@ if (packet.byteLength > 5) {
 
 Support (extensions) for more browsers.
 
-Canvas fingerprint spoofing to match given hardware specs.
+Automatic, headless page loading with a docker. Plus Devtools protocol level overriding so standard overrides aren't required. Dockerizing and making this project headless could be huge for maximizing throughput.
 
-Automatic, headless page loading with adocker. Plus Devtools protocol level overriding so standard overrides aren't required.
+Canvas fingerprint spoofing to match given hardware specs.
 
 If a feasible solution is found, a way to tunnel individual iframes (hence enhancing multi-proxy solving outside of just different tabs) may be implemented.
 
