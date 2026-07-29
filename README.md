@@ -75,7 +75,7 @@ This project effectively minimizes the latency, or time for a single solver to s
 - Pipeline of token transfer through solver -> token server -> reciever/backend is extremely fast.
 - Vice versa, pipeline of request to solve through reciever -> token server -> solver is also extremely fast.
 - Effectively, the approximate latency for a single solver to get a token to a reciever is:
-T_solver_recieve_challenge + T_solver_load_widget + T_solver_solve_widget + T_to_bounce_back_to_reciever ~ T_solver_solve_widget ~ 1-2s.
+T_solver_recieve_challenge + T_solver_load_widget + T_solver_solve_widget + T_to_bounce_back_to_reciever ~ T_solver_solve_widget. Now, this value can vary quite a bit. It usually takes at most five seconds but it honestly depends, after a while it may start to slow down too if Cloudflare begins to recognize an attack pattern. No hard specifics on this. It is simply bottlenecked by the cloudflare challenge itself, which not much can be done about. 
 
 This is one of the most effective latencies possible, as it is effectively limited by the time it takes the browser to actually complete the Cloudflare challenge. The only way to even improve the speed on such would be a truly headless, full interaction scheme that could interaction with the turnstile challenge API fully, which is obviously not a feasible method as it would quickly break without much maintenance.
 
