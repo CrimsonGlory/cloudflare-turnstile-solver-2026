@@ -21,7 +21,7 @@ window.addEventListener("message", (event) => {
     // Data must come from our own webpage.
     if (event.source !== window || !event.data) return;
 
-    if (event.data.type === "SET_TAB_PROXY") {
+    if (event.data.type == "SET_TAB_PROXY") {
         // Spoof JS fields by injecting a script overriding the fields into the page.
         if (event.data.js_API_spoof_fields) {
             let fields = event.data.js_API_spoof_fields;
@@ -104,9 +104,9 @@ window.addEventListener("message", (event) => {
                             has_dimension_check = true;
                             let type = w_match[1];
                             let val = parseInt(w_match[2], 10);
-                            if (type === 'width' && w !== val) is_match = false;
-                            if (type === 'min-width' && w < val) is_match = false;
-                            if (type === 'max-width' && w > val) is_match = false;
+                            if (type == 'width' && w !== val) is_match = false;
+                            if (type == 'min-width' && w < val) is_match = false;
+                            if (type == 'max-width' && w > val) is_match = false;
                         }
                         
                         let h_match = query.match(/(min-height|max-height|height)\s*:\s*(\d+)px/);
@@ -114,9 +114,9 @@ window.addEventListener("message", (event) => {
                             has_dimension_check = true;
                             let type = h_match[1];
                             let val = parseInt(h_match[2], 10);
-                            if (type === 'height' && h !== val) is_match = false;
-                            if (type === 'min-height' && h < val) is_match = false;
-                            if (type === 'max-height' && h > val) is_match = false;
+                            if (type == 'height' && h !== val) is_match = false;
+                            if (type == 'min-height' && h < val) is_match = false;
+                            if (type == 'max-height' && h > val) is_match = false;
                         }
                         
                         // Override match result IF it is a dimension check.
