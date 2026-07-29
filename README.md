@@ -97,6 +97,19 @@ This method is extremely effective when it comes to token harvesting. Even witho
 
 ---
 
+## Media of Applications
+
+YouTube video showing a real application case:
+https://www.youtube.com/watch?v=SkFIWGpzllE
+
+Note in that video, socket connections using the verified tokens were actively sustained and running the background, which generated A LOT of traffic. This used up a lot of network, and since I ran both the sockets and the solvers on one device, the solvers were not necessarily idealized. Because of this that video will not be used for a benchmark. Just to provide a rough idea though, in those five minutes--with only 5 solvers (and a amount of sockets increasing with the amount of tokens) 200 tokens were generated. Note that there was not one fail, all approximately 200 of those tokens went through as valid when used with siteverify to actually generate the socket bot.
+
+This shows a real case of application, but remember that more solvers can be used than just 5 for sure, as long as your device is even somewhat decent, and that this system can be split across multiple devices (which would obviously greatly improve performance and framing capabilities).
+
+Still, this video shows the general idea of the system (all farmed tokens are sent to the backend for use), and proves the claim that you can generate a few hundred tokens in only a few minutes--on a singular device, and while using that device to execute INTENSE sustained, backend logic (such as also actively supporting 200 WebSockets for a game with a lot of traffic) at the same time.
+
+---
+
 # Proxy Formats
 
 `protocol://host:port`
@@ -326,7 +339,7 @@ if (packet.byteLength > 5) {
 
 Support (extensions) for more browsers.
 
-Automatic, headless page loading with a docker. Plus Devtools protocol level overriding so standard overrides aren't required. Dockerizing and making this project headless could be huge for maximizing throughput.
+Automatic, headless page loading with a docker. Plus Devtools protocol level overriding so standard overrides aren't required. Dockerizing and making this project headless could be huge for maximizing throughput. Plus it'd just make it feel less like a PoC and more like a fully fleshed out project.
 
 Canvas fingerprint spoofing to match given hardware specs.
 
@@ -339,5 +352,3 @@ If a feasible solution is found, a way to tunnel individual iframes (hence enhan
 All contributions are very welcome. If you have a way to improve this project, please share with issues, pull requests, etc.
 
 ---
-
-## Some Images and Media of Applications (will be added soon)
