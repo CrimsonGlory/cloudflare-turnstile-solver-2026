@@ -120,7 +120,7 @@ async fn handle_connection(stream: TcpStream, state: Arc<Mutex<State>>) {
 
             // On demand solve request from a requester.
             // This will forward our request for a solve to the next available solver in queue.
-            // [1, ...solver_idx_bytes(4), user_agent_len(1), ...user_agent_bytes, ...(field_name_len, ...field_name_bytes, field_value_len, ...field_value_bytes)]
+            // [1, ...solver_idx_bytes, user_agent_len, ...user_agent_bytes, ...(field_name_len, ...field_name_bytes, field_value_len, ...field_value_bytes)]
             1 => {
                 let ua_len = raw[5] as usize;
                 let ua_bytes = &raw[6..6 + ua_len];
