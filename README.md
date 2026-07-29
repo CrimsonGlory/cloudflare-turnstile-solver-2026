@@ -57,11 +57,11 @@ To help create fingerprint variation, the goal of this system is to support mult
 
 ---
 
-## Latency, Throughput, Overall Effectiveness
+## Latency, Throughput, & Overall Effectiveness
 
 This method's primary goal is to token harvest on a specific site. Hence, it's objective is not to just open a site as previously stated. The goal is to generate as many tokens as possible.
 
-This requires the maximization of two metrics
+This requires the maximization of two metrics:
 
 - Latency (time for a single solver to fully complete the captcha, return token back to requester)
 - Throughput (latency scaled by the actual amount of workers that are solving tokens)
@@ -80,15 +80,19 @@ This is one of the most effective latencies possible, as it is effectively limit
 
 ### Throughput
 
-Throughput on this project is also great. In particular, you can easily spawn multiple browsers, including different browsers (as long as they are supported), and because the solve time for a single token usually is under two seconds, even if you spawn, say, only six browsers (a setup I have used is Chrome + Edge + FireFox + Brave + Opera + Opera GX for example), this can easily rack up to a few hundred tokens in only a minute of time. 
+Throughput on this project is also great. In particular, you can easily spawn multiple browsers, including different browsers (as long as they are supported), and because the solve time for a single token usually is under two seconds, even if you spawn, say, only six browsers (a setup I have used is Chrome + Edge + FireFox + Brave + Opera + Opera GX for example), this can easily rack up to a hundreds of tokens in only a short timeframe. 
 
 Note that this is also on a singular device. If expanded to multiple devices (since the system relies on the token server, this can easily be done), this throughput only increases.
 
-The only issue regarding throughput right now, and also mass automation, is this system's requirement of manually loading tabs to solve this. The pixel checkbox click detection makes it so that browser tabs cannot overlap and block each others UIs. This does effectively limit the number of solvers you can have as browser dimensions depend on this. That said, at the moment you can still get at the bare minimum, with no placement optimization, 5 browsers even with an average sized monitor. You can easily quickly solve for hundreds of tokens with this still. 
+The only issue regarding throughput right now, and also mass automation, is this system's requirement of manually loading tabs to solve this. The pixel checkbox click detection makes it so that browser tabs cannot overlap and block each others UIs. This does effectively limit the number of solvers you can have as browser dimensions depend on this. That said, you can still easily fit in a large amount of browsers, or if you really want you can manually click on them yourself while solving so you can make the checkbox pop up and the auto-clicker can click it. You can easily quickly solve for hundreds of tokens with this still. 
 
 As previously mentioned, dockering this method could solve this issue. This was originally intended as a PoC but turned out to be extremely effective, so I have thought about doing this. I am relatively busy though, but if I have time in the future and want to do this, I may work on dockering this project. This would allow for both headless and also running many more tabs without UI overlap issues. This would effectively maximize the throughput possible with this method.
 
 Still, as explained, throughput is very high, particularly due to the extremely low latency combined with the fact you can still easily get multiple solvers up. 
+
+### Overall
+
+This method is extremely effective when it comes to token harvesting. Even without its maximum dockerized potential, it can still effectively generate hundreds of tokens in only minutes. I will add some direct benchmarks soon along with media and videos of application.
 
 ---
 
@@ -335,4 +339,4 @@ All contributions are very welcome. If you have a way to improve this project, p
 
 ---
 
-## Some Images and Media of Applications (will be added soon, after support for a variety of browsers has been integrated)
+## Some Images and Media of Applications (will be added soon)
