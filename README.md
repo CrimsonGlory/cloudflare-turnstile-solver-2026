@@ -82,11 +82,12 @@ The Token Harvester loads the Turnstile widget by spawning iframe-based solvers,
 
 **Setup:**
 
-1. **Configure the files.** The config is in `index.html`:
+1. **Configure the files.** There is config in `index.html`:
    - Set `TOKEN_SERVER_HOST` (your token server host, obviously), `PROXY_CONNECT_TIMEOUT` (time for proxy connection to timeout and page to begin reloading), and `USE_PROXY_SOLVING` (unless you just want to use a single IP to solve, keep this as true).
    - `PRELOAD_IFRAMES` is deprecated and may be used if future iframe tunneling implementation is added. For now keep at one.
+   - Do not touch the declarations set to localStorage values. They were originally intended to be file config, but caching in localStorage is far cleaner.
   
-2. Set `localStorage.sitekey` to that website's Cloudflare sitekey.
+2. **Set `localStorage.sitekey`**. to that website's Cloudflare sitekey.
    - If you do not know how to access a sitekey, here is a short and easy method you can use to access it: in devtools, find the turnstile.js file in the sources tab. In it, ctrl f "sitekey". You'll see many instances. You can breakpoint a few of these and then run the page to get into the scope, which will have the sitekey. 
 
 3. **Set your proxies.**  Set your linesplit list of proxies to `localStorage.proxies`. The proxy extension will connect to a proxy from this list according to the received solver idx. Note the proxies list should include the protocol extension protocol://
