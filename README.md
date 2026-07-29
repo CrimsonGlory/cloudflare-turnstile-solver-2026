@@ -73,6 +73,7 @@ This project effectively minimizes the latency, or time for a single solver to s
 - The override token solver file strips away unnecessary html elements. You are left with a black background and the widget in in iframe.
 - Real browser fingerprints result in short challenges that take only seconds to go through. The time for a Cloudflare Turnstile challenge to go through takes only a few seconds at most. In general, you'll see results of even under two seconds.
 - Pipeline of token transfer through solver -> token server -> reciever/backend is extremely fast.
+- Vice versa, pipeline of request to solve through reciever -> token server -> solver is also extremely fast.
 - Effectively, the approximate latency for a single solver to get a token to a reciever is:
 T_solver_recieve_challenge + T_solver_load_widget + T_solver_solve_widget + T_to_bounce_back_to_reciever ~ T_solver_solve_widget ~ 1-2s.
 
