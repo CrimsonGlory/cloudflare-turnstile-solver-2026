@@ -154,6 +154,7 @@ The Turnstile Clicker automatically solves checkbox click challenges. Run the re
 **Setup:**
 
 Set the config values described in `main.rs`. That's all.
+
 **How it works:**
 
 The clicker identifies Cloudflare Turnstile checkboxes by analyzing pixel RGB values. It searches for pixels matching the characteristic grey ring border of the Turnstile checkbox. Once a candidate pixel is found, it performs a depth-first search (DFS) to verify the pixel forms a closed ring/loop. It then searches inward from all four sides to isolate the whitespace within the border — the actual clickable area. Finally, it dispatches OS-level input events to move the mouse to a point within that region and click.
