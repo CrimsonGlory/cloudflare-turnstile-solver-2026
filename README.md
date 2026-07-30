@@ -93,7 +93,7 @@ Still, as explained, throughput is very high, particularly due to the extremely 
 
 ### Overall
 
-This method is extremely effective when it comes to token harvesting. Even without its maximum dockerized potential, it can still effectively generate hundreds of tokens in only minutes. I will add some direct benchmarks soon along with media and videos of application.
+This method is extremely effective when it comes to token harvesting. Even without its maximum dockerized potential, it can still effectively generate hundreds of tokens in only minutes. 
 
 ---
 
