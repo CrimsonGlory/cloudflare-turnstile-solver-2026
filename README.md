@@ -147,7 +147,7 @@ Each solver tab connects to the token server's socket and registers itself as a 
 
 **Why overrides?**
 
-Using overrides does require loading the actual page, but it sidesteps issues with CORS policies, TLS fingerprinting, and other browser/address analysis the target site may employ. Because the page loads normally and passes all standard security checks, our modified scripts can generate tokens cleanly without triggering those protections.
+Using overrides does require loading the actual page, but it sidesteps issues with CORS policies, TLS fingerprinting, and other browser/address analysis the target site may employ. Because the page loads normally and passes all standard security checks, our modified scripts can generate tokens cleanly without triggering those protections. These override scripts also allow us to save resources, as they allow minimal pages that are designed just to load the turnstile widgets.
 
 ---
 
