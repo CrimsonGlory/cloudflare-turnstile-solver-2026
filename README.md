@@ -139,7 +139,11 @@ The Token Harvester loads the Turnstile widget by spawning iframe-based solvers,
 
 3. **Set your proxies.**  Set your linesplit list of proxies to `localStorage.proxies`. The proxy extension will connect to a proxy from this list according to the received solver idx. Note the proxies list should include the protocol extension protocol://
 
-4. **Apply as browser overrides.** Replace the target webpage's main HTML file with `index.html`. 
+4. **Apply as browser overrides.** Replace the target webpage's main HTML file with `index.html`.
+
+**How it works:**
+
+Each solver tab connects to the token server's socket and registers itself as a solver to the token server. These solvers will then receive forwarded requests from the token server to solve turnstile widgets. When this is received, these solvers load the turnstile widget, and passively let it be solved (if a checkbox challenge occurs, the next component in this section, the checkbox clicker will handle that). Once a result is received the turnstile callback function is called, the result of the token is sent back to the server so it can be forwarded it to the correct requester. 
 
 **Why overrides?**
 
