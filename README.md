@@ -332,7 +332,7 @@ if (packet.byteLength > 5) {
 
 Support (extensions) for more browsers.
 
-Automatic, headless page loading with a docker. Plus Devtools protocol level overriding so standard overrides aren't required. Dockerizing and making this project headless could be huge for maximizing throughput. Plus it'd just make it feel less like a PoC and more like a fully fleshed out project.
+Automatic, headless page loading with a docker. Plus Devtools protocol level overriding so standard overrides aren't required. Dockerizing and making this project headless could be huge for maximizing throughput. Plus it'd just make it feel less like a PoC and more like a fully fleshed out project. Do note, however, that due to the extreme CPU usage caused by browsers running Turnstile either way, that the benefits of the headless browser won't be as extreme, since CPU and not RAM is the main bottleneck due to all the tough JS challenges executed by Cloudflare especially. This would still serve as an optimization assuming it didn't result in Cloudflare flagging these sessions.
 
 Canvas fingerprint spoofing to match given hardware specs.
 
