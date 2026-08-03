@@ -4,6 +4,12 @@
 
 #![cfg(target_os = "windows")]
 
+// Config
+
+// Both rates are in ms. 
+const ENFORCE_Z_ORDER_RATE: u64 = 1000;
+const CHECK_NEW_PAGES_RATE: u64 = 5000;
+
 use std::{
     cmp::Reverse,
     collections::HashSet,
@@ -98,8 +104,8 @@ fn main() {
     {
         let tracked = Arc::clone(&tracked);
         thread::spawn(move || loop {
-            // 20hz refresh rate for order forcing. 
-            thread::sleep(Duration::from_millis(50)); 
+            // Should be short while minimizing performance impact.
+            thread::sleep(Duration::from_millis(ENFORCE_Z_ORDER_RATE)); 
 
             let list = tracked.lock().unwrap();
             if list.is_empty() {
@@ -120,8 +126,8 @@ fn main() {
 
     // Check for new windows. 
     loop {
-        // Long enough to not have performance impact.
-        thread::sleep(Duration::from_millis(5000)); 
+        // Should be long enough to not have performance impact while still polling.
+        thread::sleep(Duration::from_millis(CHECK_NEW_PAGES_RATE)); 
 
         let current = snapshot_visible();
         let mut list = tracked.lock().unwrap();
