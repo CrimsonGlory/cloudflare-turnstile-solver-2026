@@ -290,7 +290,7 @@ You can set config in `main.rs` for rates for those two worker threads/loops dis
 
 **How it Works:**
 
-Windows OS uses the "handle to window" (HWND) mechanism to identify different windows. This script first initially gets all pre-existing windows when it first runs and stores their HWNDs, this is used for comparison when checking for new windows so we can ignore windows that were already pre-existing. Then, there are two "worker" threads that we use as loops. One constantly checks for new windows (at a geneerous 5s interval currently so performance is not really impacted). When a new window is created, it is tracked by its HWND and assigned a hard z-index. The other actually enforces the z-index at the current rate of 20hz (or 50ms). It simply goes over all tracked windows and actually enforces the z-index by using the `setWindowPos` method. Note newer tabs are placed on top, and older tabs go below. 
+Windows OS uses the "handle to window" (HWND) mechanism to identify different windows. This script first initially gets all pre-existing windows when it first runs and stores their HWNDs, this is used for comparison when checking for new windows so we can ignore windows that were already pre-existing. Then, there are two "worker" threads that we use as loops. One checks for new windows. When a new window is created, it is tracked by its HWND and assigned a hard z-index. The other actually enforces the z-order of all tabs. It simply goes over all tracked windows and actually enforces the z-index by using the `setWindowPos` method. Note newer tabs are placed on top, and older tabs go below. 
 
 ---
 
