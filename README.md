@@ -286,7 +286,7 @@ Because of this, the issue regarding gui overlap is effectively not an issue at 
 
 **Setup:**
 
-Nothing really. Just dependencies as per usual.
+You can set config in `main.rs` for rates for those two worker threads/loops discussed to run. Otherwise just dependencies as per usual.
 
 **How it Works:**
 
