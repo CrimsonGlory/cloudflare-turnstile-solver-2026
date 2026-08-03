@@ -4,31 +4,36 @@
 
 #![cfg(target_os = "windows")]
 
-// Config
-
-// Both rates are in ms. 
+// Config for enforce z order loop rate.
 const ENFORCE_Z_ORDER_RATE: u64 = 500;
-const CHECK_NEW_PAGES_RATE: u64 = 5000;
 
 use std::{
     cmp::Reverse,
     collections::HashSet,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };
 
 use windows::Win32::{
     Foundation::{BOOL, HWND, LPARAM},
-    UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowTextLengthW, IsIconic, IsWindowVisible,
-        SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOSENDCHANGING,
+    UI::{
+        WindowsAndMessaging::{
+            EnumWindows, GetWindowTextLengthW, IsIconic, IsWindowVisible,
+            SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOSENDCHANGING,
+        },
     },
 };
+
+use inputbot::KeybdKey;
 
 // Note we need to implement unsafe Send and Sync for our hwnds, which have a *mut c_void.
 // This is why we wrap them in a struct--because we can then give the struct these unsafe traits. 
 // This will allow us to send the data to our loop/working threads: the z-order enforcement loop and the new page checker loop.
+// Otherwise we'd catch an error. 
 #[derive(Clone, Copy)]
 struct SendHwnd(HWND);
 unsafe impl Send for SendHwnd {}
@@ -92,7 +97,7 @@ unsafe fn enforce_order(sorted: &[TrackedWindow]) {
 }
 
 fn main() {
-    // We store pre-existing windows and use this as a reference list of handles
+    // We store pre-existing windows and use this as a reference list of handles.
     let pre_existing: HashSet<isize> = snapshot_visible()
         .into_iter()
         .map(|h| h.0 .0 as isize)
@@ -100,12 +105,29 @@ fn main() {
 
     let tracked: WindowList = Arc::new(Mutex::new(Vec::new()));
 
+    let checker_enabled = Arc::new(AtomicBool::new(true));
+
+    // Press "F7" to toggle the scanner on/off.
+    // This can allow you to boost performance by turning it off once you've set up all pages.
+    {
+        let checker_enabled = Arc::clone(&checker_enabled);
+        KeybdKey::F7Key.bind(move || {
+            let prev = checker_enabled.fetch_xor(true, Ordering::Relaxed);
+            println!(
+                "[F7] New-page checker {}",
+                if prev { "disabled" } else { "enabled" }
+            );
+        });
+    }
+
+    thread::spawn(|| inputbot::handle_input_events());
+
     // Enforce z-ordering for all windows.
     {
         let tracked = Arc::clone(&tracked);
         thread::spawn(move || loop {
             // Should be short while minimizing performance impact.
-            thread::sleep(Duration::from_millis(ENFORCE_Z_ORDER_RATE)); 
+            thread::sleep(Duration::from_millis(ENFORCE_Z_ORDER_RATE));
 
             let list = tracked.lock().unwrap();
             if list.is_empty() {
@@ -124,16 +146,20 @@ fn main() {
         });
     }
 
-    // Check for new windows. 
+    // Check for new windows.
     loop {
-        // Should be long enough to not have performance impact while still polling.
-        thread::sleep(Duration::from_millis(CHECK_NEW_PAGES_RATE)); 
+        thread::sleep(Duration::from_millis(10));
+
+        // Only run this loop if the checker is enabled.
+        if !checker_enabled.load(Ordering::Relaxed) {
+            continue;
+        }
 
         let current = snapshot_visible();
         let mut list = tracked.lock().unwrap();
         let known: HashSet<isize> = list.iter().map(|w| w.hwnd.0 .0 as isize).collect();
 
-        // We must ensure pre existing windows are not including by this,
+        // We must ensure pre existing windows are not included by this,
         // which we do by simply ensuring the hwnd isn't already found in the pre-existing windows list.
         let new_hwnds: Vec<SendHwnd> = current
             .iter()
