@@ -8,10 +8,9 @@
 const ENFORCE_Z_ORDER_RATE: u64 = 500;
 
 use std::{
-    cmp::Reverse,
     collections::HashSet,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -42,7 +41,8 @@ unsafe impl Sync for SendHwnd {}
 #[derive(Clone)]
 struct TrackedWindow {
     hwnd: SendHwnd,
-    z_index: usize,
+    // Insertion order for placement. lower -> newer -> higher up/more top.
+    insertion_order: usize,
 }
 
 type WindowList = Arc<Mutex<Vec<TrackedWindow>>>;
@@ -68,11 +68,6 @@ fn snapshot_visible() -> Vec<SendHwnd> {
     }
 
     hwnds
-}
-
-fn z_index_of(hwnd: SendHwnd, visible: &[SendHwnd]) -> Option<usize> {
-    let key = hwnd.0 .0 as isize;
-    visible.iter().position(|h| h.0 .0 as isize == key)
 }
 
 // Sort z-index for each window so that it is below the z-index of the current (or z_prev + 1).
@@ -106,6 +101,10 @@ fn main() {
     let tracked: WindowList = Arc::new(Mutex::new(Vec::new()));
 
     let checker_enabled = Arc::new(AtomicBool::new(true));
+
+    // We implement a global counter, so each new window gets the current value, then it decrements.
+    // So the newest window always has the lowest number and sorts to the top.
+    let next_order = Arc::new(AtomicUsize::new(usize::MAX));
 
     // Press "F7" to toggle the scanner on/off.
     // This can allow you to boost performance by turning it off once you've set up all pages.
@@ -171,11 +170,13 @@ fn main() {
             .collect();
 
         for hwnd in new_hwnds {
-            let z_index = z_index_of(hwnd, &current).unwrap_or(0);
-            list.push(TrackedWindow { hwnd, z_index });
+            // We subtract one from our global order so each new page gets a lower insertion order--meaning it is more topmost.
+            let insertion_order = next_order.fetch_sub(1, Ordering::Relaxed);
+            list.push(TrackedWindow { hwnd, insertion_order });
         }
 
-        list.sort_by_key(|w| Reverse(w.z_index));
+        // Sort by insertion_order in ascending order.
+        list.sort_by_key(|w| w.insertion_order);
         list.retain(|w| unsafe { IsWindowVisible(w.hwnd.0).as_bool() });
     }
 }
