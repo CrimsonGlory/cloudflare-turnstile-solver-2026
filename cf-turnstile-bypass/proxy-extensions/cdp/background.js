@@ -1,8 +1,24 @@
+// Paths config for this background script to read files from, for proxies and our override script.
+
+const PROXIES_LIST_PATH = String.raw`C:\Users\image\OneDrive\Documents\cloudflare-turnstile-solver-2026-main\cloudflare-turnstile-solver-2026-main\cf-turnstile-bypass\proxies.txt`;
+
+const OVERRIDE_FILE_PATH = String.raw`C:\Users\image\OneDrive\Documents\cloudflare-turnstile-solver-2026-main\cloudflare-turnstile-solver-2026-main\cf-turnstile-bypass\token-harvester\index.html`;
+
 // Object map for proxy ID info.
 let active_proxy = null;
 
 // Object map for proxy authentication credentials.
 let active_credentials = null;
+
+// Cached text of the proxies file.
+let proxies_file_content = null;
+
+// Tracks which tab IDs currently have the debugger attached for override interception.
+let debugger_attached_tabs = new Set();
+
+// Maps tab ID -> the exact top-level URL the tab is navigating to.
+// Only requests matching this URL will be overridden; all others pass through untouched.
+let tab_pending_urls = new Map();
 
 // Load our state from local storage on script wakeup to prevent data loss after idling.
 const state_loaded = chrome.storage.local.get(['active_proxy', 'active_credentials']).then((res) => {
@@ -77,16 +93,16 @@ function update_chrome_proxy_config() {
 
 // Listen to messages posted by the client if we want to set up a proxy.
 chrome.runtime.onMessage.addListener((message, sender, send_response) => {
-    if (message.action === "setup_proxy" && sender.tab) {
+    if (message.action == "setup_proxy" && sender.tab) {
         // Ensure state is loaded before modifying.
         state_loaded.then(() => {
-            const proxy_string = message.proxy_details;
-            
+            let proxy_string = message.proxy_details;
+
             try {
                 // "protocol://host:port", "protocol://user:pass@host:port"
-                const url = new URL(proxy_string);
+                let url = new URL(proxy_string);
                 let proxy_type = url.protocol.replace(":", "").toLowerCase();
-                const host_name = url.hostname;
+                let host_name = url.hostname;
                 let port_num = parseInt(url.port, 10);
 
                 active_proxy = {
@@ -113,7 +129,149 @@ chrome.runtime.onMessage.addListener((message, sender, send_response) => {
                 send_response({ success: false });
             }
         });
-        return true; 
+        return true;
     }
+
+    // Cache the proxies file text.
+    if (message.action == "proxies_file_content") {
+        if (message.content) {
+            proxies_file_content = message.content;
+        } else {
+            console.error("[Proxy Bridge] Could not read proxies file:", message.error);
+        }
+        return false;
+    }
+
+    // Send the proxies list to whichever tab requests it (content_main writes the proxy list to localStorage).
+    if (message.action == "get_inject_payload") {
+        send_response({ proxies: proxies_file_content });
+        return true;
+    }
+
+    // Get the override file content response relayed back from the offscreen document.
+    if (message.action == "override_file_content") {
+        let { request_id, tab_id, content, error } = message;
+        if (error || !content) {
+            console.error("[Override] Could not read override file:", error);
+            chrome.debugger.sendCommand({ tabId: tab_id }, "Fetch.continueRequest", { requestId: request_id });
+            return false;
+        }
+        chrome.debugger.sendCommand({ tabId: tab_id }, "Fetch.fulfillRequest", {
+            requestId: request_id,
+            responseCode: 200,
+            responseHeaders: [{ name: "Content-Type", value: "text/html; charset=utf-8" }],
+            body: btoa(unescape(encodeURIComponent(content)))
+        }).catch((err) => {
+            console.error("[Override] Fetch.fulfillRequest failed:", err);
+        });
+        return false;
+    }
+
     return false;
+});
+
+// There can be errors if a message is sent to an uncreated offscreen document,
+// so this simply allows us to ensure it exists.
+async function ensure_offscreen_document() {
+    let existing = await chrome.offscreen.hasDocument();
+    if (!existing) {
+        await chrome.offscreen.createDocument({
+            url: "offscreen.html",
+            reasons: ["BLOBS"],
+            justification: "Read local override file via file:// fetch which is unavailable in service workers"
+        });
+    }
+}
+
+// Read the proxies file and cache it.
+async function load_proxies_file() {
+    if (!PROXIES_LIST_PATH) return;
+    await ensure_offscreen_document();
+    chrome.runtime.sendMessage({
+        action: "read_proxies_file",
+        file_path: PROXIES_LIST_PATH
+    });
+}
+
+load_proxies_file();
+
+// Attach the debugger that listens for requests and overrides the target page file with our override to a tab.
+async function attach_debugger_to_tab(tab_id) {
+    try {
+        if (debugger_attached_tabs.has(tab_id)) {
+            // Detach the existing session before re-attaching. Without this, Chrome still considers
+            // the debugger attached even after we delete the tab from our local set, so the next
+            // chrome.debugger.attach call throws "Another debugger is already attached" and the
+            // catch block swallows it — meaning Fetch.enable never runs and the override never fires.
+            await chrome.debugger.detach({ tabId: tab_id }).catch(() => {});
+            debugger_attached_tabs.delete(tab_id);
+        }
+        await chrome.debugger.attach({ tabId: tab_id }, "1.3");
+        debugger_attached_tabs.add(tab_id);
+        await chrome.debugger.sendCommand({ tabId: tab_id }, "Fetch.enable", {
+            patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Response" }]
+        });
+    } catch (err) {
+        console.error("[Override] Failed to attach debugger to tab", tab_id, err);
+    }
+}
+
+// Detaches the debugger cleanly when a tab is closed.
+chrome.tabs.onRemoved.addListener((tab_id) => {
+    if (debugger_attached_tabs.has(tab_id)) {
+        chrome.debugger.detach({ tabId: tab_id }).catch(() => {});
+        debugger_attached_tabs.delete(tab_id);
+    }
+    tab_pending_urls.delete(tab_id);
+});
+
+// Attach the debugger to every tab when this extension loads.
+chrome.tabs.query({}, (tabs) => {
+    for (let tab of tabs) {
+        if (tab.id != null) attach_debugger_to_tab(tab.id);
+    }
+});
+
+// Attach the debugger to a new tab the moment the tab is created, before it navigates anywhere.
+chrome.tabs.onCreated.addListener((tab) => {
+    if (tab.id != null) attach_debugger_to_tab(tab.id);
+});
+
+// Whenever we are about to navigate we need to get the url so we can know what request to override (the main index.html for that page),
+// and we need to attach the debugger again. The issue is that chrome:// tabs are privileged and debuggers cannot be run on them, 
+// so there are some issues with loading the debugger from the base tab (empty base tab) to our target tab, so instead we attach it to
+// this tab here. Consequently, we cannot immediately inject our override script since it only just loaded as we loaded our target page,
+// but reloading the page immediately solves this issue so it's not really a big deal.
+chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+    if (!OVERRIDE_FILE_PATH) return;
+    if (details.frameId !== 0) return;
+    tab_pending_urls.set(details.tabId, details.url);
+    debugger_attached_tabs.delete(details.tabId);
+    attach_debugger_to_tab(details.tabId);
+}, { url: [{ schemes: ["http", "https"] }] });
+
+// Freeze the request and intercept the response with our own override file.
+// Only do this for the page itself that we navigate to, so no other sources are overridden.
+// This way the turnstile interface still works as expected.
+chrome.debugger.onEvent.addListener(async (source, method, params) => {
+    if (method !== "Fetch.requestPaused") return;
+    let tab_id = source.tabId;
+    let pending_url = tab_pending_urls.get(tab_id);
+
+    if (!OVERRIDE_FILE_PATH || !pending_url || params.request.url !== pending_url) {
+        chrome.debugger.sendCommand(source, "Fetch.continueRequest", { requestId: params.requestId });
+        return;
+    }
+
+    // Delete the pending URL so only this one request gets overridden.
+    // We just want to override the main index.html of the page.
+    tab_pending_urls.delete(tab_id);
+
+    await ensure_offscreen_document();
+    chrome.runtime.sendMessage({
+        action: "read_override_file",
+        file_path: OVERRIDE_FILE_PATH,
+        request_id: params.requestId,
+        tab_id: tab_id
+    });
 });

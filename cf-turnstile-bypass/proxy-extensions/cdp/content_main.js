@@ -1,9 +1,24 @@
+// Write localStorage data at the start of each page.
+// Set the config here.
+(function () {
+    const SITEKEY = "sitekey";
+    const PROXY_CONNECT_TIMEOUT = 5000;
+    const USE_PROXY_SOLVING = true;
+    const TOKEN_SERVER_HOST = "ws://localhost:8080";
+    try {
+        localStorage.sitekey = SITEKEY;
+        localStorage.proxy_connect_timeout = PROXY_CONNECT_TIMEOUT;
+        localStorage.use_proxy_solving = USE_PROXY_SOLVING;
+        localStorage.token_server_host = TOKEN_SERVER_HOST;
+    } catch (e) {}
+})();
+
 // Native toString spoof helper.
 let native_to_string = function toString() {
     return "function toString() { [native code] }";
 };
 
-// Generate hidden symbol references to keep tracking invisible to the page's JS environment.
+// Generate hidden symbol references for anonymity.
 const SPOOF_SYMBOL = Symbol("spoof_indicator");
 const STORE_SYMBOL = Symbol("spoof_store");
 
@@ -20,6 +35,14 @@ if (!window[STORE_SYMBOL]) {
 window.addEventListener("message", (event) => {
     // Data must come from our own webpage.
     if (event.source != window || !event.data) return;
+
+    // Write the proxies list to localStorage once the background has read and relayed it.
+    if (event.data.type == "SET_LOCALSTORAGE_INJECT") {
+        try {
+            if (event.data.payload.proxies != null) localStorage.proxies = event.data.payload.proxies;
+        } catch (e) {}
+        return;
+    }
 
     if (event.data.type == "SET_TAB_PROXY") {
         // Spoof JS fields by injecting a script overriding the fields into the page.
@@ -66,13 +89,12 @@ window.addEventListener("message", (event) => {
                     let native_get_to_string = function () { return "function get " + prop + "() { [native code] }"; };
                     let native_set_to_string = function () { return "function set " + prop + "() { [native code] }"; };
 
-                    // Set string spoofs to look like untampered JS.
+                    // Set string spoofs.
                     Object.defineProperty(mock_get, 'toString', { value: native_get_to_string, configurable: true, writable: true });
                     Object.defineProperty(mock_set, 'toString', { value: native_set_to_string, configurable: true, writable: true });
                     Object.defineProperty(mock_get.toString, 'toString', { value: native_to_string, configurable: true, writable: true });
                     Object.defineProperty(mock_set.toString, 'toString', { value: native_to_string, configurable: true, writable: true });
 
-                    // Tag the mock using our hidden symbol.
                     mock_get[SPOOF_SYMBOL] = true;
 
                     Object.defineProperty(target_obj, prop, {
@@ -87,17 +109,17 @@ window.addEventListener("message", (event) => {
             // matchMedia protection implementation. Triggers if spoofed window inner dimensions are set.
             if (data_store['window.innerWidth'] != undefined || data_store['window.innerHeight'] != undefined) {
                 let orig_matchMedia = window.matchMedia;
-                
+
                 if (!orig_matchMedia[SPOOF_SYMBOL]) {
                     let mock_matchMedia = function matchMedia(query) {
                         let mql = orig_matchMedia.call(this, query);
-                        
+
                         let w = window[STORE_SYMBOL]['window.innerWidth'];
                         let h = window[STORE_SYMBOL]['window.innerHeight'];
-                        
+
                         let is_match = true;
                         let has_dimension_check = false;
-                        
+
                         // Parse standard pixel dimension queries.
                         let w_match = query.match(/(min-width|max-width|width)\s*:\s*(\d+)px/);
                         if (w_match) {
@@ -108,7 +130,7 @@ window.addEventListener("message", (event) => {
                             if (type == 'min-width' && w < val) is_match = false;
                             if (type == 'max-width' && w > val) is_match = false;
                         }
-                        
+
                         let h_match = query.match(/(min-height|max-height|height)\s*:\s*(\d+)px/);
                         if (h_match) {
                             has_dimension_check = true;
@@ -118,7 +140,7 @@ window.addEventListener("message", (event) => {
                             if (type == 'min-height' && h < val) is_match = false;
                             if (type == 'max-height' && h > val) is_match = false;
                         }
-                        
+
                         // Override match result IF it is a dimension check.
                         if (has_dimension_check) {
                             Object.defineProperty(mql, 'matches', {
@@ -127,16 +149,16 @@ window.addEventListener("message", (event) => {
                                 enumerable: true
                             });
                         }
-                        
+
                         return mql;
                     };
-                    
+
                     let native_matchMedia_to_string = function () { return "function matchMedia() { [native code] }"; };
                     Object.defineProperty(mock_matchMedia, 'toString', { value: native_matchMedia_to_string, configurable: true, writable: true });
                     Object.defineProperty(mock_matchMedia.toString, 'toString', { value: native_to_string, configurable: true, writable: true });
-                    
+
                     mock_matchMedia[SPOOF_SYMBOL] = true;
-                    
+
                     Object.defineProperty(window, 'matchMedia', {
                         value: mock_matchMedia,
                         configurable: true,
@@ -146,7 +168,7 @@ window.addEventListener("message", (event) => {
             }
         }
 
-        // Forward the requested proxy to the isolated relay.
+        // Forward the requested proxy to the background.
         window.postMessage({
             type: "FORWARD_TO_BACKGROUND",
             proxy_details: event.data.proxy_details
