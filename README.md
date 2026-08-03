@@ -26,7 +26,6 @@ A proof-of-concept Cloudflare Turnstile bypass system built with Rust and JavaSc
 | Major |
 | :--- |
 | The solver is **not headless** — a GUI is required. With dockerization this could be fixed. |
-| For current setup, you have to actually install the extension onto each browser. With CDP though, since the extension is saved this setup is only required once per config change (currently config is hardcoded into the extension, this will be changed soon though). |
 | Ineffective for general, random web-scraping. Knowing the websites it will be used on is most effective. |
 | No custom fingerprint spoofing for TLS/JA4, canvas, and other metrics like navigator values. But, given the legitimacy of the browsers, this isn't as severe as usual. |
 
@@ -35,6 +34,7 @@ A proof-of-concept Cloudflare Turnstile bypass system built with Rust and JavaSc
 | The method relies on a browser with overrides enabled. |
 | Designed for smaller-scale token harvesting, though the token server architecture does support larger-scale operations. |
 | Tunneling multiple proxies through each iframe is not supported. Do note this may potentially be added in the future if a feasible solution (some form of advanced tunneling) is found. Note that per-window proxying, however, is supported. |
+| For current setup, you have to actually install the extension onto each browser. With CDP though, since the extension is saved this setup is only required once per config change (currently config is hardcoded into the extension, this will be changed soon though). |
 
 ---
 
