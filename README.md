@@ -28,6 +28,7 @@ A proof-of-concept Cloudflare Turnstile bypass system built with Rust and JavaSc
 | The solver is **not headless** — a GUI is required. With dockerization this could be fixed. |
 | Ineffective for general, random web-scraping. Knowing the websites it will be used on is most effective. |
 | No custom fingerprint spoofing for TLS/JA4, canvas, and other metrics like navigator values. But, given the legitimacy of the browsers, this isn't as severe as usual. |
+| Browsers must be manually started as of now. No automation is in place for that. |
 
 | Minor |
 | :--- |
@@ -72,10 +73,10 @@ This project effectively minimizes the latency, or time for a single solver to s
 - Because the method is single site harvesting, no page redirect, or entirely new page loading is required.
 - The override token solver file strips away unnecessary html elements. You are left with a black background and the widget in in iframe.
 - Real browser fingerprints result in short challenges that take only seconds to go through. The time for a Cloudflare Turnstile challenge to go through takes only a few seconds at most. In general, you'll see results of even under two seconds.
-- Pipeline of token transfer through solver -> token server -> reciever/backend is extremely fast.
-- Vice versa, pipeline of request to solve through reciever -> token server -> solver is also extremely fast.
-- Effectively, the approximate latency for a single solver to get a token to a reciever is:
-T_solver_recieve_challenge + T_solver_load_widget + T_solver_solve_widget + T_to_bounce_back_to_reciever ~ T_solver_solve_widget (time to solve widget takes a good few seconds, time to do everything else is only a fraction of a second). Now, this value can vary quite a bit. It usually takes at most five seconds but it honestly depends, after a while it may start to slow down too if Cloudflare begins to recognize an attack pattern. No hard specifics on this. It is simply bottlenecked by the cloudflare challenge itself, which not much can be done about. 
+- Pipeline of token transfer through solver -> token server -> receiver/backend is extremely fast.
+- Vice versa, pipeline of request to solve through receiver -> token server -> solver is also extremely fast.
+- Effectively, the approximate latency for a single solver to get a token to a receiver is:
+T_solver_receive_challenge + T_solver_load_widget + T_solver_solve_widget + T_to_bounce_back_to_receiver ~ T_solver_solve_widget (time to solve widget takes a good few seconds, time to do everything else is only a fraction of a second). Now, this value can vary quite a bit. It usually takes at most five seconds but it honestly depends, after a while it may start to slow down too if Cloudflare begins to recognize an attack pattern. No hard specifics on this. It is simply bottlenecked by the cloudflare challenge itself, which not much can be done about. 
 
 This is one of the most effective latencies possible, as it is effectively limited by the time it takes the browser to actually complete the Cloudflare challenge. The only way to even improve the speed on such would be a truly headless, full interaction scheme that could interaction with the turnstile challenge API fully, which is obviously not a feasible method as it would quickly break without much maintenance.
 
@@ -85,9 +86,7 @@ Throughput on this project is also great. In particular, you can easily spawn mu
 
 Note that this is also on a singular device. If expanded to multiple devices (since the system relies on the token server, this can easily be done), this throughput only increases.
 
-The only issue regarding throughput right now, and also mass automation, is this system's requirement of manually loading tabs to solve this. The pixel checkbox click detection makes it so that browser tabs cannot overlap and block each others UIs. This does effectively limit the number of solvers you can have as browser dimensions depend on this. That said, you can still easily fit in a large amount of browsers. You can still easily solve for many tokens with this. Also, though not ideal, you could click on each individual browser that has its checkbox covered when needed to make it render at the top level, so that the checkbox on it becomes visible. This would allow you to use more browsers even with overlapping, though obviously that is a very scuffed solution.
-
-As previously mentioned, dockering this method could solve this issue. This was originally intended as a PoC but turned out to be extremely effective, so I have thought about doing this. I am relatively busy though, but if I have time in the future and want to do this, I may work on dockering this project. This would allow for both headless and also running many more tabs without UI overlap issues. This would effectively maximize the throughput possible with this method.
+The only issue regarding throughput right now, and also mass automation, is this system's requirement of manually loading tabs to solve this. The system is not headless. Perhaps a solution like dockering with a virtual framebuffer could do this, or some sort of standard equivalent. However, this would usually not make a major difference as the Cloudflare challenges result in mainly a CPU bottleneck, and CPU performance would only receive a minor boost from this. Plus, this would also take a lot of work to do, and eliminate OS level gui clicking. You'd have to click at the browser level. 
 
 Still, as explained, throughput is very high, particularly due to the extremely low latency combined with the fact you can still easily get multiple solvers up. 
 
@@ -99,7 +98,11 @@ This method is extremely effective when it comes to token harvesting. Even witho
 
 ## Tested Use Applications
 
-While actively connecting high traffic game sockets for every token solved, this method was used to connect **200** bots to a web game protected by Cloudflare Turnstile in **under 5 minutes (approximately 4 minutes, 40 seconds)**. This only used **five solvers** (Chrome, Edge, Firefox, Opera, Brave), and was actively running all those socket connections in the background for each token each time (which can cause significant network slowdown), and since it is a game with constant update ticks this traffic grew very large. This should be accounted for as it caused solving to lose speed. This was all done on a **single device (8 cores, 16gb, i7 processor)**. JS API spoofs were only some basic navigator and window screen dimension edits. There was no order to solver solving. Each solver just attempted to solve as quickly as possible. With even more optimized config and setup for stealth, this could be further improved. Plus the potential for headless instance spawning with dockers exist, as is mentioned and will be mentioned throughout this repository. Initial solving rates were much faster, with it spawning 50 and even 100 in much less time (possibly a combination of intense network stress from sustained socket traffic increasing, and Cloudflare starting to increase security response, though I am not sure how much each contributed). So, with optimized config and possible user-agent order calling, plus more solvers, this could absolutely be improved. I may run a test with even more solvers and see the result later.
+While actively connecting high traffic game sockets for every token solved, this method was used to connect **200** bots to a web game protected by Cloudflare Turnstile in **under 5 minutes (approximately 4 minutes, 40 seconds)**, using only **five solvers** (Chrome, Edge, Firefox, Opera, Brave), and was actively running all those socket connections in the background for each token each time (which can cause significant network slowdown), and since it is a game with constant update ticks this traffic grew very large. This should be accounted for as it caused solving to lose speed. This was all done on a **single device (8 cores, 16gb, i7 processor)**. JS API spoofs were only some basic navigator and window screen dimension edits. There was no order to solver solving. Each solver just attempted to solve as quickly as possible. 
+
+I have another device at disposal so at some point in the future I may make my backend run on that and do the token reemption/siteverify with that, and only do solving on our device to get a more accurate benchmark.
+
+Even then, though. If you only have a single device, this shows you can open up HUNDREDS of high traffic, and also high parsing and decoding logic WebSockets at the same time and still get solid solve rates, which is definitely solid. 
 
 ---
 
@@ -114,12 +117,13 @@ The http protocol is recommended. Some browsers have iffy implementation for soc
 
 ## Components
 
-The bypass is comprised of four main components:
+The bypass is comprised of five main components:
 
 1. **Token Harvester / Turnstile Widget Loader**
 2. **Turnstile Widget Identifier & Clicker**
 3. **Token Server**
 4. **Proxy Extensions**
+5. **Z-index Orderer**
 
 ---
 
@@ -266,14 +270,39 @@ Each extension acts as a bridge for proxy routing and fingerprint spoofing, driv
 
 ---
 
+### 5. Z-index Orderer
+
+**Note this is currently only designed for Windows. Not going to add implementation for other operating systems myself, but pull requests are welcome.**
+
+This component serves as a direct solution to a major issue posed by the OS-level gui clicking: the browser overlap can cause tabs to become unclickable. Since our clicker relies on actual rendered data on our screen, if a browser is covered by another browser, it can become unclickable.
+
+So, to deal with this, this component orders and locks Z-indexes for all browsers, which almost entirely negates the overlap issue. Because Cloudflare Turnstile widgets will only spawn in the top left corner, for each browser, you need only to leave that top left corner non-overlapped per browser window. This means effectively, the spacing for your browser windows only have to be the size of the turnstile checkbox--which is very small. 
+
+This is obviously an insanely large reduction from without z-index ordering and locking, as without such you'd need to individually space out browsers as they could not overlap, as if an interaction was made to a browser with a region previously below another browser that has a checkbox over that region, that checkbox would then become covered as the interacted browser would get the top z-index and then cover the other browser. 
+
+With this, though, newer tabs are always locked above older tabs. Because of this, you simply only need to ensure the checkbox area isn't covered by an newer browser--but the checkbox area can now go over older browsers as those older browsers cannot go above the newer browser (well for a short moment they do, our script polls and corrects this at a very quick rate though so it is negligible)--effectively shrinking the required overlap area to just a checkbox. 
+
+Because of this, the issue regarding gui overlap is effectively not an issue at all. On pure screen area alone, with this change you could certainly spawn at least a hundred checkboxes, maybe more but I'm not doing the math for that. Point is, this allows you to spawn as many browsers as you'll need without facing overlap issues. The only issue becomes standard resource bottlenecks. 
+
+**Setup:**
+
+Nothing really. Just dependencies as per usual.
+
+**How it Works:**
+
+Windows OS uses the "handle to window" (HWND) mechanism to identify different windows. This script first initially gets all pre-existing windows when it first runs and stores their HWNDs, this is used for comparison when checking for new windows so we can ignore windows that were already pre-existing. Then, there are two "worker" threads that we use as loops. One constantly checks for new windows (at a geneerous 5s interval currently so performance is not really impacted). When a new window is created, it is tracked by its HWND and assigned a hard z-index. The other actually enforces the z-index at the current rate of 20hz (or 50ms). It simply goes over all tracked windows and actually enforces the z-index by using the `setWindowPos` method. Note newer tabs are placed on top, and older tabs go below. 
+
+---
+
 ## Starting It Up
 
 1. Start the **token server**.
 2. Start the **auto-clicker**.
-3. Open your **modified webpages**.
-4. Press **F8** to enable the auto-clicker.
-5. Start your backend, token managing and requesting system. 
-6. Watch it go.
+3. Start the **z-index-orderer**.
+4. Open your **modified webpages**.
+5. Press **F8** to enable the auto-clicker.
+6. Start your backend, token managing and requesting system. 
+7. Watch it go.
 
 ---
 
