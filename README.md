@@ -52,8 +52,8 @@ What this method IS viable for, though, is solving repeated instances of Cloudfl
 
 To help create fingerprint variation, the goal of this system is to support multiple browsers (i.e. they have a proxy connector extension).
 
-- Any CDP browser (encompasses the vast majority of the web browser market--including Chrome, Edge, Brave, Opera, and more).
-- FireFox.
+- Any CDP browser (encompasses the vast majority of the web browser market--including Chrome, Edge, Brave, Opera, and more). **Status: up to date.** This has been edited to allow config setting (including file paths to read) right in the extension, along with the fact the extension itself now automatically overrides file content. This helps to make the process automate a bit more.
+- FireFox. **Status: out of date.** Cdp extensions now override file content themselves without needing to use devtools, and allow you to input config right into them, which will be injected into the files. The old version of index.html is still required if you want to use FireFox, so it has been kept but renamed to `firefox_old_index.html`. **Note you'll have to manually load the temporary extension on FireFox each time and then override the script in devtools.**
 
 ---
 
@@ -129,6 +129,8 @@ The Token Harvester loads the Turnstile widget by spawning iframe-based solvers,
 
 **Setup:**
 
+**If you are on FireFox:**
+
 1. **Configure the files.** There is config in `index.html`:
    - Set `TOKEN_SERVER_HOST` (your token server host, obviously), `PROXY_CONNECT_TIMEOUT` (time for proxy connection to timeout and page to begin reloading), and `USE_PROXY_SOLVING` (unless you just want to use a single IP to solve, keep this as true).
    - `PRELOAD_IFRAMES` is deprecated and may be used if future iframe tunneling implementation is added. For now keep at one.
@@ -140,6 +142,10 @@ The Token Harvester loads the Turnstile widget by spawning iframe-based solvers,
 3. **Set your proxies.**  Set your linesplit list of proxies to `localStorage.proxies`. The proxy extension will connect to a proxy from this list according to the received solver idx. Note the proxies list should include the protocol extension protocol://
 
 4. **Apply as browser overrides.** Replace the target webpage's main HTML file with `index.html`.
+
+**If you are on CDP:**
+
+None. All of the config has been moved to the extension. The setup for such will be detailed there.
 
 **How it works:**
 
@@ -209,11 +215,34 @@ The architecture for the specific protocol of the server is above. The server as
 
 The extensions allow us to utilize browser proxy API capabilities to connect to proxies, per tab. They also have JS API anti-fingerprint/spoof metrics, along with a WebRTC host peeking block.
 
-For each browser you'll be using, you'll need to add the respective extension for that browser from `proxy-extensions` to whatever browser you are using (ex. firefox for firefox, cdp for cdp browsers, truly a shocker), and run it. These extensions provide the API necessary for asynchronous proxy connections, allowing you to await and connect to a proxy before continuing execution. 
+For each browser you'll be using, you'll need to add the respective extension for that browser from `proxy-extensions` to whatever browser you are using (ex. firefox for firefox, cdp for cdp browsers, truly a shocker), and run it. These extensions provide the API necessary for asynchronous proxy connections, allowing you to await and connect to a proxy before continuing execution.
+
+**Setup:**
+
+**For FireFox:**
+
+Simply load the extension in FireFox. Nothing else.
+
+**For CDP:**
+
+The CDP extension does a bit more than the FireFox extension now, you'll set config in here now, which helps as you do not have to set it for each individual browser, helping automation and helping to make it not such a pain in the ass to set up.
+
+1. **Set your file paths**
+   Set PROXIES_LIST_PATH and OVERRIDE_FILE_PATH in `background.js`. Names are self explanatory. Note the proxy list should be a linesplit list of proxies following the expected format discussed earlier in this readme.
+
+2. **Set index.html config**
+   Set SITEKEY, PROXY_CONNECT_TIMEOUT, USE_PROXY_SOLVING, and TOKEN_SERVER_HOST. These names should also be self explanatory. These values are injected as `localStorage` values into your page, and `index.html` reads and uses them. 
+
+Then just load the extension of course.
+
+Do note as of now, if your site target changes, you'll need to reinstate the extension on each browser. It'll be easy to add code to just manage this directly though, perhaps I'll even make the token server have a feature to send data for config to each browser so that the extension doesn't have hardcoded constants. It's just like this for now.
 
 ## How It Works
 
-Each extension acts as a bridge for proxy routing and fingerprint spoofing, driven by `window.postMessage` events. The steps to the execution flow are detailed below:
+Each extension acts as a bridge for proxy routing and fingerprint spoofing, driven by `window.postMessage` events. The execution flow follows something like this:
+
+0. **CDP Specific Stuff (at the moment FireFox doesn't support this, so giving it its own section)**
+   localStorage config edits are immediately injected upon page load. File paths for proxies and the override are now read by the extension too and th e file contents can be parsed. Additionally, the extension can attach cdp debuggers to any site (except for privileged chrome:// pages of course), and these debuggers can listen for outgoing web requests, and check if the info for the webrequest that went out matches the site we are currently on, and if it does it returns the override script back instead of the actual site page. 
 
 1. **Initialization**
    The extension listens for a `SET_TAB_PROXY` message sent by the client (which our solvers use). This payload contains the target proxy details and the specific JavaScript field data you want to spoof. *(Note: See the token server section for details on structuring this field data).*
