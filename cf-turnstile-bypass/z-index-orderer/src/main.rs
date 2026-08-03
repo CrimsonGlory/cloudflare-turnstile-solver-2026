@@ -7,7 +7,7 @@
 // Config
 
 // Both rates are in ms. 
-const ENFORCE_Z_ORDER_RATE: u64 = 1000;
+const ENFORCE_Z_ORDER_RATE: u64 = 500;
 const CHECK_NEW_PAGES_RATE: u64 = 5000;
 
 use std::{
