@@ -288,7 +288,7 @@ Because of this, the issue regarding gui overlap is effectively not an issue at 
 
 You can a config value in `main.rs` for a for a z-order enforcement loop/thread rate. Otherwise just dependencies as per usual.
 
-**When you run this, press F7 to turn off the new page checking loop this component runs in order to check for new pages. You can turn it back on by pressing F7 again too. It is toggleable, but on by default so you can add new pages.**
+**When you run this, press F7 to turn off the new page checking loop this component runs in order to check for new pages. You can turn it back on by pressing F7 again too. It is toggleable, but on by default so you can add new pages. Once you are done loading pages, you can toggle this off to save performance.**
 
 **How it Works:**
 
