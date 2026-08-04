@@ -19,7 +19,7 @@ A proof-of-concept Cloudflare Turnstile bypass system built with Rust and JavaSc
 | :--- |
 | Data is handled and already managed by a server that makes managing your haverested tokens easy. |
 | Method is generally effective when you know the website you want to apply it to beforehand. |
-| Easy to use and setup, especially compared to certain other bypasses. |
+| System is effectively modularized into multiple components, and makes for an effective pipeline. This also makes making changes and improvements simpler and component based. |
 
 ### Caveats
 
