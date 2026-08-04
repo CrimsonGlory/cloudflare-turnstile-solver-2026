@@ -53,8 +53,7 @@ What this method IS viable for, though, is solving repeated instances of Cloudfl
 
 To help create fingerprint variation, the goal of this system is to support multiple browsers (i.e. they have a proxy connector extension).
 
-- Any CDP browser (encompasses the vast majority of the web browser market--including Chrome, Edge, Brave, Opera, and more). **Status: up to date.** This has been edited to allow config setting (including file paths to read) right in the extension, along with the fact the extension itself now automatically overrides file content. This helps to make the process automate a bit more.
-- FireFox. **Status: out of date.** Cdp extensions now override file content themselves without needing to use devtools, and allow you to input config right into them, which will be injected into the files. The old version of index.html is still required if you want to use FireFox, so it has been kept but renamed to `firefox_old_index.html`. **Note you'll have to manually load the temporary extension on FireFox each time and then override the script in devtools.**
+- Any CDP browser (encompasses the vast majority of the web browser market--including Chrome, Edge, Brave, Opera, and more).
 
 ---
 
@@ -82,11 +81,13 @@ This is one of the most effective latencies possible, as it is effectively limit
 
 ### Throughput
 
-Throughput on this project is also great. In particular, you can easily spawn multiple browsers, including different browsers (as long as they are supported), and because the solve time for a single token usually is under two seconds, even if you spawn, say, only six browsers (a setup I have used is Chrome + Edge + FireFox + Brave + Opera + Opera GX for example), this can easily rack up to a hundreds of tokens in only a short timeframe. 
+Throughput on this project is also great. In particular, you can easily spawn multiple browsers, including different browsers (as long as they are supported), and because the solve time for a single token usually is under two seconds, even if you spawn, say, even only five browsers (a setup I have used is Chrome + Edge + Brave + Opera + Opera GX for example, though do note of course more can be used for even faster throughput), this can easily rack up to a hundreds of tokens in only a short timeframe. 
 
 Note that this is also on a singular device. If expanded to multiple devices (since the system relies on the token server, this can easily be done), this throughput only increases.
 
 The only issue regarding throughput right now, and also mass automation, is this system's requirement of manually loading tabs to solve this. The system is not headless. Perhaps a solution like dockering with a virtual framebuffer could do this, or some sort of standard equivalent. However, this would usually not make a major difference as the Cloudflare challenges result in mainly a CPU bottleneck, and CPU performance would only receive a minor boost from this. Plus, this would also take a lot of work to do, and eliminate OS level gui clicking. You'd have to click at the browser level. 
+
+Automatic page loader may also work but also brings a lot of depth. These are problems that can be tackled if I have time and want to do this--or someone sees promise in the theory proposed by this repository and pursues perfection of it.
 
 Still, as explained, throughput is very high, particularly due to the extremely low latency combined with the fact you can still easily get multiple solvers up. 
 
@@ -123,23 +124,7 @@ The Token Harvester loads the Turnstile widget by spawning iframe-based solvers,
 
 **Setup:**
 
-**If you are on FireFox:**
-
-1. **Configure the files.** There is config in `index.html`:
-   - Set `TOKEN_SERVER_HOST` (your token server host, obviously), `PROXY_CONNECT_TIMEOUT` (time for proxy connection to timeout and page to begin reloading), and `USE_PROXY_SOLVING` (unless you just want to use a single IP to solve, keep this as true).
-   - `PRELOAD_IFRAMES` is deprecated and may be used if future iframe tunneling implementation is added. For now keep at one.
-   - Do not touch the declarations set to localStorage values. They were originally intended to be file config, but caching in localStorage is far cleaner.
-  
-2. **Set `localStorage.sitekey`**. to that website's Cloudflare sitekey.
-   - If you do not know how to access a sitekey, here is a short and easy method you can use to access it: in devtools, find the turnstile.js file in the sources tab. In it, ctrl f "sitekey". You'll see many instances. You can breakpoint a few of these and then run the page to get into the scope, which will have the sitekey. 
-
-3. **Set your proxies.**  Set your linesplit list of proxies to `localStorage.proxies`. The proxy extension will connect to a proxy from this list according to the received solver idx. Note the proxies list should include the protocol extension protocol://
-
-4. **Apply as browser overrides.** Replace the target webpage's main HTML file with `index.html`.
-
-**If you are on CDP:**
-
-None. All of the config has been moved to the extension. The setup for such will be detailed there.
+None. All of the config has been moved to the extension. You will just need the path for this file later (to use in the extension). The setup for such will be detailed there.
 
 **How it works:**
 
@@ -209,17 +194,9 @@ The architecture for the specific protocol of the server is above. The server as
 
 The extensions allow us to utilize browser proxy API capabilities to connect to proxies, per tab. They also have JS API anti-fingerprint/spoof metrics, along with a WebRTC host peeking block.
 
-For each browser you'll be using, you'll need to add the respective extension for that browser from `proxy-extensions` to whatever browser you are using (ex. firefox for firefox, cdp for cdp browsers, truly a shocker), and run it. These extensions provide the API necessary for asynchronous proxy connections, allowing you to await and connect to a proxy before continuing execution.
+For each browser you'll be using, you'll need to add the respective extension for that browser from `proxy-extensions` to whatever browser you are using (ex. cdp for cdp browsers, truly a shocker), and run it. These extensions provide the API necessary for asynchronous proxy connections, allowing you to await and connect to a proxy before continuing execution.
 
 **Setup:**
-
-**For FireFox:**
-
-Simply load the extension in FireFox. Nothing else.
-
-**For CDP:**
-
-The CDP extension does a bit more than the FireFox extension now, you'll set config in here now, which helps as you do not have to set it for each individual browser, helping automation and helping to make it not such a pain in the ass to set up.
 
 1. **Set your file paths**
    Set PROXIES_LIST_PATH and OVERRIDE_FILE_PATH in `background.js`. Names are self explanatory. Note the proxy list should be a linesplit list of proxies following the expected format discussed earlier in this readme.
@@ -235,7 +212,7 @@ Do note as of now, if your site target changes, you'll need to reinstate the ext
 
 Each extension acts as a bridge for proxy routing and fingerprint spoofing, driven by `window.postMessage` events. The execution flow follows something like this:
 
-0. **CDP Specific Stuff (at the moment FireFox doesn't support this, so giving it its own section)**
+0. **Page Injections and Debugger Injections**
    localStorage config edits are immediately injected upon page load. File paths for proxies and the override are now read by the extension too and th e file contents can be parsed. Additionally, the extension can attach cdp debuggers to any site (except for privileged chrome:// pages of course), and these debuggers can listen for outgoing web requests, and check if the info for the webrequest that went out matches the site we are currently on, and if it does it returns the override script back instead of the actual site page. 
 
 1. **Initialization**
