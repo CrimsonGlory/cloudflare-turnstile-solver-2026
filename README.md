@@ -96,16 +96,6 @@ This method is extremely effective when it comes to token harvesting. Even witho
 
 ---
 
-## Tested Use Applications
-
-While actively connecting high traffic game sockets for every token solved, this method was used to connect **200** bots to a web game protected by Cloudflare Turnstile in **under 5 minutes (approximately 4 minutes, 40 seconds)**, using only **five solvers** (Chrome, Edge, Firefox, Opera, Brave), and was actively running all those socket connections in the background for each token each time (which can cause significant network slowdown), and since it is a game with constant update ticks this traffic grew very large. This should be accounted for as it caused solving to lose speed. This was all done on a **single device (8 cores, 16gb, i7 processor)**. JS API spoofs were only some basic navigator and window screen dimension edits. There was no order to solver solving. Each solver just attempted to solve as quickly as possible. 
-
-I have another device at disposal so at some point in the future I may make my backend run on that and do the token reemption/siteverify with that, and only do solving on our device to get a more accurate benchmark.
-
-Even then, though. If you only have a single device, this shows you can open up HUNDREDS of high traffic, and also high parsing and decoding logic WebSockets at the same time and still get solid solve rates, which is definitely solid. 
-
----
-
 # Proxy Formats
 
 `protocol://host:port`
