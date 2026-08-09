@@ -43,7 +43,7 @@ All solver binaries run and perfectly set up browsers.
 | The method relies on a browser with overrides enabled. |
 | Designed for smaller-scale token harvesting, though the token server architecture does support larger-scale operations. |
 | Tunneling multiple proxies through each iframe is not supported. Do note this may potentially be added in the future if a feasible solution (some form of advanced tunneling) is found. Note that per-window proxying, however, is supported. |
-| For current setup, you have to actually install the extension onto each browser. With CDP though, since the extension is saved this setup is only required once per config change (currently config is hardcoded into the extension, this will be changed soon though). |
+| For current setup, you have to actually install the extension onto each browser. With CDP though, since the extension is saved this setup is only required once. |
 
 ---
 
