@@ -1,16 +1,17 @@
 // Write localStorage data at the start of each page.
-// Set the config here.
+// Config values are loaded from the inject config file via the background payload.
 (function () {
-    const SITEKEY = "sitekey";
-    const PROXY_CONNECT_TIMEOUT = 5000;
-    const USE_PROXY_SOLVING = true;
-    const TOKEN_SERVER_HOST = "ws://localhost:8080";
-    try {
-        localStorage.sitekey = SITEKEY;
-        localStorage.proxy_connect_timeout = PROXY_CONNECT_TIMEOUT;
-        localStorage.use_proxy_solving = USE_PROXY_SOLVING;
-        localStorage.token_server_host = TOKEN_SERVER_HOST;
-    } catch (e) {}
+    window.addEventListener("message", function on_config_inject(event) {
+        if (event.source != window || !event.data) return;
+        if (event.data.type != "SET_LOCALSTORAGE_INJECT") return;
+
+        event.data.payload.inject_config.split("\n").forEach((line) => {
+            let [key, value] = line.split(/:(.*)/);
+            localStorage[key.trim()] = value.trim();
+        });
+
+        window.removeEventListener("message", on_config_inject);
+    });
 })();
 
 // Native toString spoof helper.

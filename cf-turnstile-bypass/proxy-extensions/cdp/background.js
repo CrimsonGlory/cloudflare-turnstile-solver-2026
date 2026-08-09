@@ -4,6 +4,8 @@ const PROXIES_LIST_PATH = String.raw`C:\Users\image\OneDrive\Documents\cloudflar
 
 const OVERRIDE_FILE_PATH = String.raw`C:\Users\image\OneDrive\Documents\cloudflare-turnstile-solver-2026-main\cloudflare-turnstile-solver-2026-main\cf-turnstile-bypass\token-harvester\index.html`;
 
+const INJECT_CONFIG_FILE_PATH = String.raw`C:\Users\image\OneDrive\Documents\cloudflare-turnstile-solver-2026-main\cloudflare-turnstile-solver-2026-main\cf-turnstile-bypass\proxy-extensions\inject_config.txt`;
+
 // Object map for proxy ID info.
 let active_proxy = null;
 
@@ -12,6 +14,9 @@ let active_credentials = null;
 
 // Cached text of the proxies file.
 let proxies_file_content = null;
+
+// Cached parsed config from the inject config file.
+let inject_config_content = null;
 
 // Tracks which tab IDs currently have the debugger attached for override interception.
 let debugger_attached_tabs = new Set();
@@ -142,9 +147,19 @@ chrome.runtime.onMessage.addListener((message, sender, send_response) => {
         return false;
     }
 
-    // Send the proxies list to whichever tab requests it (content_main writes the proxy list to localStorage).
+    // Cache the parsed inject config.
+    if (message.action == "inject_config_file_content") {
+        if (message.content) {
+            inject_config_content = message.content;
+        } else {
+            console.error("[Inject Config] Could not read inject config file:", message.error);
+        }
+        return false;
+    }
+
+    // Send the proxies list and inject config to whichever tab requests it (content_main writes them to localStorage).
     if (message.action == "get_inject_payload") {
-        send_response({ proxies: proxies_file_content });
+        send_response({ proxies: proxies_file_content, inject_config: inject_config_content });
         return true;
     }
 
@@ -194,6 +209,18 @@ async function load_proxies_file() {
 }
 
 load_proxies_file();
+
+// Read the inject config file and cache it.
+async function load_inject_config_file() {
+    if (!INJECT_CONFIG_FILE_PATH) return;
+    await ensure_offscreen_document();
+    chrome.runtime.sendMessage({
+        action: "read_inject_config_file",
+        file_path: INJECT_CONFIG_FILE_PATH
+    });
+}
+
+load_inject_config_file();
 
 // Attach the debugger that listens for requests and overrides the target page file with our override to a tab.
 async function attach_debugger_to_tab(tab_id) {
