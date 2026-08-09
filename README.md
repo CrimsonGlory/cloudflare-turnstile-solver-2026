@@ -210,7 +210,7 @@ For each browser you'll be using, you'll need to add the respective extension fo
    Set PROXIES_LIST_PATH, OVERRIDE_FILE_PATH, and INJECT_CONFIG_FILE_PATH in `background.js`. Names are self explanatory. Note the proxy list should be a linesplit list of proxies following the expected format discussed earlier in this readme.
 
 2. **Set inject config**
-   Set SITEKEY, PROXY_CONNECT_TIMEOUT, USE_PROXY_SOLVING, and TOKEN_SERVER_HOST. These names should also be self explanatory. These values are injected as `localStorage` values into your page, and `index.html` reads and uses them. 
+   Set SITEKEY, PROXY_CONNECT_TIMEOUT, USE_PROXY_SOLVING, and TOKEN_SERVER_HOST in your text config. A file with example values is provided in the `proxy-extensions` directory. These names should also be self explanatory. These values are injected as `localStorage` values into your page, and your harvester `index.html` reads and uses them. 
 
 Then just load the extension of course.
 
