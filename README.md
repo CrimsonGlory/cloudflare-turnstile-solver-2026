@@ -207,14 +207,12 @@ For each browser you'll be using, you'll need to add the respective extension fo
 **Setup:**
 
 1. **Set your file paths**
-   Set PROXIES_LIST_PATH and OVERRIDE_FILE_PATH in `background.js`. Names are self explanatory. Note the proxy list should be a linesplit list of proxies following the expected format discussed earlier in this readme.
+   Set PROXIES_LIST_PATH, OVERRIDE_FILE_PATH, and INJECT_CONFIG_FILE_PATH in `background.js`. Names are self explanatory. Note the proxy list should be a linesplit list of proxies following the expected format discussed earlier in this readme.
 
-2. **Set index.html config**
+2. **Set inject config**
    Set SITEKEY, PROXY_CONNECT_TIMEOUT, USE_PROXY_SOLVING, and TOKEN_SERVER_HOST. These names should also be self explanatory. These values are injected as `localStorage` values into your page, and `index.html` reads and uses them. 
 
 Then just load the extension of course.
-
-Do note as of now, if your site target changes, you'll need to reinstate the extension on each browser. It'll be easy to add code to just manage this directly though, perhaps I'll even make the token server have a feature to send data for config to each browser so that the extension doesn't have hardcoded constants. It's just like this for now.
 
 ## How It Works
 
