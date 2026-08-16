@@ -27,32 +27,17 @@
 <body>
     <div id="iframe-farm"></div>
     <script>
-        (async () => {
-            // You'll notice a lot of repetitive declarations and stuff here, 
-            // code hasn't been neatened and I repurposed it multiple times,
-            // so yeah it looks a bit weird that multiple repeat declarations are made, sorry about that.
-            // Goes from localStorage -> const -> window. 
-            
-            // Set your token server host.
-            const TOKEN_SERVER_HOST = localStorage.token_server_host;
-            
-            // Number of iframes to load on startup.
-            // Keep at one for now. This is deprecated.
-            // May be useful if iframe tunneling is implemented.
-            const PRELOAD_IFRAMES = 1;
-
-            // Sitekey.
-            const SITEKEY = localStorage.sitekey;
-
+        (async () => {   
             // Timeout for proxy to connect, in ms.
             const PROXY_CONNECT_TIMEOUT = parseInt(localStorage.proxy_connect_timeout);
 
             // Boolean for if you want to use the multi-proxy system for solving.
             const USE_PROXY_SOLVING = localStorage.use_proxy_solving == "true" ? true : false;
 
-            window.token_server_host = TOKEN_SERVER_HOST;
-            window.preload_iframes = PRELOAD_IFRAMES;
-            window.sitekey = SITEKEY;
+            window.token_server_host = localStorage.token_server_host;
+            // Keep at one for now, feature is deprecated. May be utilized if efficient tunneling is implemented.
+            window.preload_iframes = 1;
+            window.sitekey = localStorage.sitekey;
 
             // parse proxies by linesplitting and trimming.
             let proxies = localStorage.proxies.split(/\r?\n/).map(p => p.trim()).filter(Boolean);
