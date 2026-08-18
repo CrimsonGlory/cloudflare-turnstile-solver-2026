@@ -33,7 +33,7 @@ All solver binaries run and perfectly set up browsers.
 
 | Major |
 | :--- |
-| The solver is **not headless** — a GUI is required. With dockerization this could be fixed. |
+| The solver is **not headless** — a real GUI browser is required (Chrome `--headless` changes the fingerprint). The Docker image runs that GUI on **Xvfb** so no host display is needed. |
 | Ineffective for general, random web-scraping. Knowing the websites it will be used on is most effective. |
 | No custom fingerprint spoofing for TLS/JA4, canvas, and other metrics like navigator values. But, given the legitimacy of the browsers, this isn't as severe as usual. |
 | Browsers must be manually started as of now. No automation is in place for that. |
@@ -270,6 +270,128 @@ Windows OS uses the "handle to window" (HWND) mechanism to identify different wi
 ---
 
 ## Starting It Up
+
+### Docker (recommended)
+
+The image runs the token server, the OS-level clicker, and a **headed** Google Chrome on a virtual framebuffer (Xvfb). Chrome is **not** launched with `--headless` — that flag changes the user-agent, WebGL, and window metrics enough for Cloudflare to treat the session as a bot. Xvfb gives Chrome a real X11 screen so it still thinks it is a desktop browser.
+
+The Windows-only z-index-orderer is not started in the container.
+
+**1. Configure**
+
+```bash
+cp .env.example .env
+# TARGET_URL defaults to https://www.upwork.com/ (used by the title test)
+```
+
+Edit `config/inject_config.txt`:
+
+```
+SITEKEY: <your turnstile sitekey>
+PROXY_CONNECT_TIMEOUT: 5000
+USE_PROXY_SOLVING: false
+TOKEN_SERVER_HOST: ws://127.0.0.1:8080
+```
+
+If you want per-tab proxies, put them in `config/proxies.txt` (one `protocol://host:port` per line) and set `USE_PROXY_SOLVING: true`.
+
+**2. Run**
+
+```bash
+docker compose up --build
+```
+
+Wait until the logs show the stack is up **and** a solver has registered:
+
+```
+[+] Solver 0 added to queue. Total available for UA '...': 1.
+```
+
+If you only see Chrome launching and no solver line, the override did not load — set `ENABLE_VNC=1` and check that Chrome is on `TARGET_URL`.
+
+The token server listens on `ws://localhost:8080`.
+
+**3. Request a token**
+
+```bash
+# how many browser solvers are idle
+python3 examples/request_token.py --count
+
+# block until one token comes back (printed to stdout)
+python3 examples/request_token.py
+
+# optional: turnstile.render extras + JS spoofs
+python3 examples/request_token.py \
+  --field action=login \
+  --field cData=abc123 \
+  --field window.innerWidth=1920 \
+  --field window.innerHeight=1080
+```
+
+`examples/request_token.py` is stdlib-only. A non-zero exit means no solver was registered, the solve failed, or the server was unreachable.
+
+**Check that the real site loaded** (not Cloudflare's `Just a moment...`):
+
+```bash
+docker compose exec solver python3 /app/examples/test_site.py --expect Upwork
+# or from the host (CDP is published on localhost:9222)
+python3 examples/test_site.py --expect Upwork
+```
+
+PASS means `<title>` contains `Upwork`. FAIL means the browser is still on the Cloudflare interstitial. `PAGE_OVERRIDE` must stay `0` for this test — the harvester override replaces the real page.
+
+**4. Optional: watch the display**
+
+```bash
+ENABLE_VNC=1 docker compose up
+# then connect a VNC client to localhost:5900
+```
+
+Useful environment variables (compose / `.env`):
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `TARGET_URL` | `https://www.upwork.com/` | Page Chrome opens. With `PAGE_OVERRIDE=0` this is the real site. |
+| `PAGE_OVERRIDE` | `0` | `1` replaces that document with the token harvester. |
+| `CLICKER_ENABLED` | `1` | Start the checkbox clicker without pressing F8. |
+| `BROWSER_COUNT` | `1` | How many Chrome windows (each gets its own profile). |
+| `SCREEN_WIDTH` / `SCREEN_HEIGHT` | `1920` / `1080` | Xvfb and window size. |
+| `ENABLE_VNC` | `0` | Set `1` and connect a VNC client to `localhost:5900` to watch the virtual display. |
+| `CHROME_NO_SANDBOX` | `1` | Passes `--no-sandbox` to Chrome. See below. |
+
+Chrome profiles persist in the `chrome-profile` volume so the extension install and browser state survive restarts.
+
+### Chrome `--no-sandbox`
+
+The image starts Chrome with `--no-sandbox` (`CHROME_NO_SANDBOX=1`) because Chrome's own sandbox usually cannot start inside Docker (user namespaces, seccomp, and missing `SYS_ADMIN` / setuid helper).
+
+That is a real security trade-off, not just a convenience flag:
+
+- Chrome's sandbox is what keeps a compromised **renderer** (the process that parses HTML/JS from `TARGET_URL`) from taking over the rest of the browser.
+- With `--no-sandbox`, a Chrome renderer exploit runs with the same privileges as the browser process — here, the unprivileged `solver` user inside the container.
+- Combined with a container that is `--privileged`, has `SYS_ADMIN`, or mounts the Docker socket / host filesystem, that can become a host compromise.
+- Remote DevTools (port `9222`) is equivalent to full control of the browser profile (cookies, sessions, further navigation). Compose binds it to `127.0.0.1` only; do not publish it on `0.0.0.0`.
+
+Practical limits if you keep the default:
+
+- Do not point `TARGET_URL` at pages you do not trust.
+- Do not run the container as root, `--privileged`, or with host mounts you care about.
+- Leave the CDP publish on loopback.
+
+To try Chrome's real sandbox instead (it may still fail to start):
+
+```yaml
+environment:
+  CHROME_NO_SANDBOX: "0"
+cap_add:
+  - SYS_ADMIN
+security_opt:
+  - seccomp=unconfined
+```
+
+Note that granting `SYS_ADMIN` and disabling seccomp **widens** the container's attack surface in order to restore Chrome's inner sandbox. Prefer the default (`--no-sandbox` in an otherwise tight container) unless you have a reason to invert that.
+
+### Manual (desktop)
 
 1. Start the **token server**.
 2. Start the **auto-clicker**.

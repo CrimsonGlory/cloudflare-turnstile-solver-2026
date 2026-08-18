@@ -1,0 +1,4 @@
+# One proxy per line. Blank lines and # comments are ignored by most editors
+# but the extension treats every non-empty line as a proxy URL.
+# http://host:port
+# http://user:pass@host:port

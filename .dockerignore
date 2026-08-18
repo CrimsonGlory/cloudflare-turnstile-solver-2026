@@ -1,0 +1,15 @@
+.git
+.gitignore
+**/.DS_Store
+**/target
+**/__pycache__
+**/*.pyc
+**/*.md
+!README.md
+config/proxies.txt
+*.crx
+*.pem
+chrome-profile
+.idea
+.vscode
+.env

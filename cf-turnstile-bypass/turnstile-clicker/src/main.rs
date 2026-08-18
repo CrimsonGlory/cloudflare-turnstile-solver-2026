@@ -44,8 +44,21 @@ pub struct Rect {
     pub height: u32,
 }
 
+fn env_truthy(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(v) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => false,
+    }
+}
+
 fn main() {
-    let active = Arc::new(AtomicBool::new(false));
+    // Docker / unattended environments have no keyboard. CLICKER_ENABLED=1
+    // starts the scanner immediately; F8 still toggles it afterwards.
+    let start_enabled = env_truthy("CLICKER_ENABLED");
+    let active = Arc::new(AtomicBool::new(start_enabled));
     let active_clone = Arc::clone(&active);
 
     // Press "F8" to toggle the scanner on/off for safety.
@@ -62,7 +75,11 @@ fn main() {
 
     let mut enigo = Enigo::new(&Settings::default()).expect("Failed to create Enigo");
 
-    println!("Press F8 to activate the auto-clicker.");
+    if start_enabled {
+        println!("Auto-clicker has been ACTIVATED (CLICKER_ENABLED). Press F8 to pause.");
+    } else {
+        println!("Press F8 to activate the auto-clicker.");
+    }
 
     loop {
         if !active.load(Ordering::SeqCst) {
@@ -71,7 +88,9 @@ fn main() {
         }
 
         let queue = detect_checkboxes();
-        println!("Detected {} checkbox(es)", queue.len());
+        if !queue.is_empty() {
+            println!("Detected {} checkbox(es)", queue.len());
+        }
 
         for rect in &queue {
             // If active is false, the toggle will just stop us from clicking anything--but it'll still keep detecting checkboxes.

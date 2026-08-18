@@ -6,8 +6,11 @@
         if (event.data.type != "SET_LOCALSTORAGE_INJECT") return;
 
         event.data.payload.inject_config.split("\n").forEach((line) => {
+            if (!line || !line.trim() || line.trim().startsWith("#")) return;
             let [key, value] = line.split(/:(.*)/);
-            localStorage[key.trim()] = value.trim();
+            if (!key || value == null) return;
+            // index.html reads lowercase keys (sitekey, token_server_host, ...).
+            localStorage[key.trim().toLowerCase()] = value.trim();
         });
 
         window.removeEventListener("message", on_config_inject);
