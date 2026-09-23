@@ -1,490 +1,129 @@
 # cloudflare-turnstile-solver-2026
 
-A proof-of-concept Cloudflare Turnstile bypass system built with Rust and JavaScript. An effective, multi-component token-harvesting system. No API service required.
+Runs a real headed Chrome instance (on Xvfb in Docker) and exposes it to your scripts. You send a URL, the browser loads it, waits for the page to finish, returns the cookies, and closes the tab. Use those cookies with `curl_cffi` or any HTTP client that needs a browser-grade session.
+
+The upstream project focused on Turnstile token harvesting. This fork adds an on-demand **cookie API** so you can test any site without hardcoding a target URL.
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for architecture, component details, token-server protocol, and advanced setup.
 
 ---
 
-Still a work in progress.
+## Fork changes
 
-Top priority: 
-Add automatic browser solver startup.
-All solver binaries run and perfectly set up browsers.
+Changes made in this fork relative to the original project:
 
----
+| Area | Change |
+| :--- | :--- |
+| **Cookie API** | New HTTP server on port `8081` (`POST /v1/cookies`). Loads any URL via CDP, collects cookies, closes the tab. |
+| **Python client** | New `solver` package with `setup()` and `get_all_cookies()`. Stdlib-only client; no extra deps for the API itself. |
+| **On-demand loading** | Removed hardcoded `TARGET_URL`. Chrome starts on `about:blank`; URLs are passed per request. |
+| **`min_wait`** | Optional minimum wait after page load so redirect chains and late cookie writes are captured. |
+| **Docker** | Cookie server started in `entrypoint.sh`; port `8081` exposed in compose. |
+| **Examples** | Added `examples/test_cookies.py` and `examples/fetch_with_cookies.py`. |
+| **Removed** | Windows-only `z-index-orderer` (not used in the Linux/Docker path). |
+| **Docs split** | README simplified for usage; detailed upstream docs moved to `DEVELOPMENT.md`. |
 
-### Pros
-
-| Major |
-| :--- |
-| No API service is required. This is completely free of charge to use. |
-| Solver can quickly generate tokens. |
-| The method is relatively firm and not as easy to patch as other bypasses, as it relies on overriding pages to avoid any policies like CORs or any fingerprinting, and the checkbox identifier will work as long as Cloudflare does not drastically change the UI of the widget itself. |
-| This method has a far higher success rate than many other methods. |
-| Because this method uses standard web browsers, the entire solving process comes off as legitimate to Cloudflare. |
-| Great for building headless applications. Even though the solver itself needs GUI, once the token is solved for you can do everything headlessly. |
-
-| Minor |
-| :--- |
-| Data is handled and already managed by a server that makes managing your haverested tokens easy. |
-| Method is generally effective when you know the website you want to apply it to beforehand. |
-| System is effectively modularized into multiple components, and makes for an effective pipeline. This also makes making changes and improvements simpler and component based. |
-
-### Caveats
-
-| Major |
-| :--- |
-| The solver is **not headless** — a real GUI browser is required (Chrome `--headless` changes the fingerprint). The Docker image runs that GUI on **Xvfb** so no host display is needed. |
-| Ineffective for general, random web-scraping. Knowing the websites it will be used on is most effective. |
-| No custom fingerprint spoofing for TLS/JA4, canvas, and other metrics like navigator values. But, given the legitimacy of the browsers, this isn't as severe as usual. |
-| Browsers must be manually started as of now. No automation is in place for that. |
-
-| Minor |
-| :--- |
-| The method relies on a browser with overrides enabled. |
-| Designed for smaller-scale token harvesting, though the token server architecture does support larger-scale operations. |
-| Tunneling multiple proxies through each iframe is not supported. Do note this may potentially be added in the future if a feasible solution (some form of advanced tunneling) is found. Note that per-window proxying, however, is supported. |
-| For current setup, you have to actually install the extension onto each browser. With CDP though, since the extension is saved this setup is only required once. |
+Token harvesting (`PAGE_OVERRIDE=1`, token server, harvester, clicker) is still available. See [DEVELOPMENT.md](DEVELOPMENT.md#token-harvesting).
 
 ---
 
-## Why use this Method?
-
-This method is designed as a free alternative to more top-level, or "enterprise" grade bypasses. I wanted to avoid solver APIs, and webdriver methods, for a completely real and legit browser instance. 
-
-This also avoids the use of stealth browsers, which work, but constantly require updating all fingerprinting metrics to match current browsers. This is exceptionally high maintenance. I wanted to create a method that also requires much lower maintenance, and will generally be easy to re-implement if patched.
-
-Also, as previously mentioned, this method is particularly most effective when targeting specific websites, as even with an automatic page loader, custom turnstile render field calls, for example, need to be managed per-website. This method is NOT designed as page load -> solve for any website. So it is not viable for webscraping.
-
-What this method IS viable for, though, is solving repeated instances of Cloudflare Turnstiles on a singular site. Though, I have not compared it to standard methods like undetected Selenium loading, so I can't say if it's particularly better or worse, I can say this can safely generate many tokens, while being an extremely simple and free alternative to API services. 
-
-## Supported Browsers (as of now).
-
-To help create fingerprint variation, the goal of this system is to support multiple browsers (i.e. they have a proxy connector extension).
-
-- Any CDP browser (encompasses the vast majority of the web browser market--including Chrome, Edge, Brave, Opera, and more).
-
----
-
-## Latency, Throughput, & Overall Effectiveness
-
-This method's primary goal is to token harvest on a specific site. Hence, it's objective is not to just open a site as previously stated. The goal is to generate as many tokens as possible.
-
-This requires the maximization of two metrics:
-
-- Latency (time for a single solver to fully complete the captcha, return token back to requester)
-- Throughput (latency scaled by the actual amount of workers that are solving tokens)
-
-### Latency
-
-This project effectively minimizes the latency, or time for a single solver to solve the token. A few things contribute to this fact:
-- Because the method is single site harvesting, no page redirect, or entirely new page loading is required.
-- The override token solver file strips away unnecessary html elements. You are left with a black background and the widget in in iframe.
-- Real browser fingerprints result in short challenges that take only seconds to go through. The time for a Cloudflare Turnstile challenge to go through takes only a few seconds at most. In general, you'll see results of even under two seconds.
-- Pipeline of token transfer through solver -> token server -> receiver/backend is extremely fast.
-- Vice versa, pipeline of request to solve through receiver -> token server -> solver is also extremely fast.
-- Effectively, the approximate latency for a single solver to get a token to a receiver is:
-T_solver_receive_challenge + T_solver_load_widget + T_solver_solve_widget + T_to_bounce_back_to_receiver ~ T_solver_solve_widget (time to solve widget takes a good few seconds, time to do everything else is only a fraction of a second). Now, this value can vary quite a bit. It usually takes at most five seconds but it honestly depends, after a while it may start to slow down too if Cloudflare begins to recognize an attack pattern. No hard specifics on this. It is simply bottlenecked by the cloudflare challenge itself, which not much can be done about. 
-
-This is one of the most effective latencies possible, as it is effectively limited by the time it takes the browser to actually complete the Cloudflare challenge. The only way to even improve the speed on such would be a truly headless, full interaction scheme that could interaction with the turnstile challenge API fully, which is obviously not a feasible method as it would quickly break without much maintenance.
-
-### Throughput
-
-Throughput on this project is also great. In particular, you can easily spawn multiple browsers, including different browsers (as long as they are supported), and because the solve time for a single token usually is under two seconds, even if you spawn, say, even only five browsers (a setup I have used is Chrome + Edge + Brave + Opera + Opera GX for example, though do note of course more can be used for even faster throughput), this can easily rack up to a hundreds of tokens in only a short timeframe. 
-
-Note that this is also on a singular device. If expanded to multiple devices (since the system relies on the token server, this can easily be done), this throughput only increases.
-
-The only issue regarding throughput right now, and also mass automation, is this system's requirement of manually loading tabs to solve this. The system is not headless. Perhaps a solution like dockering with a virtual framebuffer could do this, or some sort of standard equivalent. However, this would usually not make a major difference as the Cloudflare challenges result in mainly a CPU bottleneck, and CPU performance would only receive a minor boost from this. Plus, this would also take a lot of work to do, and eliminate OS level gui clicking. You'd have to click at the browser level. 
-
-Automatic page loader may also work but also brings a lot of depth. These are problems that can be tackled if I have time and want to do this--or someone sees promise in the theory proposed by this repository and pursues perfection of it.
-
-Still, as explained, throughput is very high, particularly due to the extremely low latency combined with the fact you can still easily get multiple solvers up. 
-
-### Overall
-
-This method is extremely effective when it comes to token harvesting. Even without its maximum dockerized potential, it can still effectively generate hundreds of tokens in only minutes. 
-
----
-
-# Proxy Formats
-
-`protocol://host:port`
-`protocol://user:pass@host:port`
-
-The http protocol is recommended. Some browsers have iffy implementation for socks proxies.
-
----
-
-## Components
-
-The bypass is comprised of four main components:
-
-1. **Token Harvester / Turnstile Widget Loader**
-2. **Turnstile Widget Identifier & Clicker**
-3. **Token Server**
-4. **Proxy Extensions**
-
----
-
-### 1. Token Harvester / Turnstile Widget Loader
-
-The Token Harvester loads the Turnstile widget by spawning iframe-based solvers, each pointing at a different Cloudflare site widget. Every solver iframe connects to the token server and forwards any solved tokens to it, which is done once it receives an on demand request from your backend/receivers.
-
-**Setup:**
-
-None. All of the config has been moved to the extension. You will just need the path for this file later (to use in the extension). The setup for such will be detailed there.
-
-**How it works:**
-
-Each solver tab connects to the token server's socket and registers itself as a solver to the token server. These solvers will then receive forwarded requests from the token server to solve turnstile widgets. When this is received, these solvers load the turnstile widget, and passively let it be solved (if a checkbox challenge occurs, the next component in this section, the checkbox clicker will handle that). Once a result is received the turnstile callback function is called, the result of the token is sent back to the server so it can be forwarded it to the correct requester. 
-
-**Why overrides?**
-
-Using overrides does require loading the actual page, but it sidesteps issues with CORS policies, TLS fingerprinting, and other browser/address analysis the target site may employ. Because the page loads normally and passes all standard security checks, our modified scripts can generate tokens cleanly without triggering those protections. These override scripts also allow us to save resources, as they allow minimal pages that are designed just to load the turnstile widgets.
-
----
-
-### 2. Turnstile Clicker
-
-The Turnstile Clicker automatically solves checkbox click challenges. Run the relevant `main.rs` file to start it. The clicker is **disabled by default** — press **F8** to toggle it on or off.
-
-**Setup:**
-
-Set the config values described in `main.rs`. That's all.
-
-**How it works:**
-
-The clicker identifies Cloudflare Turnstile checkboxes by analyzing pixel RGB values. It searches for pixels matching the characteristic grey ring border of the Turnstile checkbox. Once a candidate pixel is found, it performs a depth-first search (DFS) to verify the pixel forms a closed ring/loop. It then searches inward from all four sides to isolate the whitespace within the border — the actual clickable area. Finally, it dispatches OS-level input events to move the mouse to a point within that region and click.
-
-> **Note:** The F8 toggle exists just to prevent any potential false positives. Toggle it on when you're on the pages just to avoid false positives (though it is pretty thorough, but just in case).
-
----
-
-### 3. Token Server
-
-The Token Server doesn't participate in solving—it routes solver requests to available solvers, and forwards completed tokens back to their respective requesters. Solver iframes forward their tokens here as they're solved.
-
-**Setup:**
-
-Set the `PORT` value in config. That's all.
-
-**Packet & Protocol Structure:**
-
-*All values are little-endian.*
-
-#### Serverbound (client -> server):
-
-| Sent From | Header | Description |
-|-----------|--------|-------------|
-| Solver | `0` | Incoming token result from a solver. The server routes it back to the specific requester who asked for it by extracting the requester ID, then re-adds the solver to the available queue.<br><br>**Structure:** `<0, ...requester_id_bytes (u32), ...solver_idx_bytes (u32), ...token_bytes>`<br>*Note: If the solver failed to get a token, then there are no token bytes.* |
-| Receiver | `1` | On-demand solve request from a requester. The server pulls the next available solver from the queue and forwards this assignment to them.<br><br>**User-Agent Routing:** You can specify a specific user-agent in this packet, which will then make the token server force a solver with that user-agent. This is particularly useful for mimicking real web traffic, and distributing solves across an amount that mimics the real web traffic distribution of user-agents. You can also just leave user-agent as `""` for a random selection.<br><br>**Field Spoofing:** The `fields` data allows you to implement JS field spoofs for a few things:<br>• **JS APIs:** You can spoof JS APIs like navigator properties and window dimensions by specifying `navigator.property`, `window.property`, etc. You can spoof with whatever JS properties you'd like basically. Window/viewport dimensions, navigator properties, etc. are all great properties you can spoof. However, so as to not confuse it with another field type (the next we will talk about), your JS field spoofs should refer to names in the structure of `API.key`. Nested references, like `API.key.key`, are also fine. For your field values, though obviously for the protocol they must be passed in as string data, if the values are directly castable to other primitive types (number, boolean), they will be automatically converted to such by the solvers for their logic. Otherwise, if not directly convertable to said types, they will be kept as strings.<br>• **Render Calls:** The `turnstile.render` function call, which initializes the widget, can take in special fields and extra data, such as `action`, or `cData`. To counter this, you may also specify field data for these in this packet. To specify field data for this, simply make the field name data you pass in the form of `key`. This contrasts from the `API.key` structure of the first case, and the system will know you are referring to a custom render call field. These fields will then be passed into the render call the solver makes.<br><br>**Structure:** `<1, ...solver_idx_bytes (u32), user_agent_len (u8), ...user_agent_bytes ...(field_name_len (u8), ...field_name_bytes, field_value_len (u8), ...field_value_bytes)>` |
-| Solver | `2` | Register the sending socket as a solver. The server appends its socket ID to the available solvers queue.<br><br>**Queue Buckets:** It appends the socket ID to the solver queue bucket that matches the specified user-agent provided by the solver. If a bucket/HashSet for such does not exist yet, then it is created and the solver's socket ID is added to it. A user-agent can be referred to by the receiver when making requests, which will force only a solver with the matching user-agent to solve the request.<br><br>**Structure:** `<2, ...user_agent_bytes>` |
-| Receiver | `3` | Request the total available solvers count. Good for analyzing how many active solving instances you can spawn.<br><br>**Structure:** `<3>` |
-
-#### Clientbound (server -> client):
-
-| Endpoint | Name | Description |
-|----------|------|-------------|
-| Receiver | Token | Incoming token delivered to a requester.<br><br>**Structure:** `<...solver_idx_bytes (u32), ...token_bytes>`<br>*Note: If the solver failed to get a token, then there are no token bytes.* |
-| Receiver | Solvers Unavailable | A request made by a solver could not be completed because no solvers were available to accept it.<br><br>**Structure:** `<0>` |
-| Solver | Solve Request | Solve a turnstile widget request that is delivered to a solver. Field data is parsed and does whatever is necessary (`API.key` -> JavaScript API is spoofed with the given field value, `key` -> turnstile render call adds this field).<br><br>**Structure:** `<...solver_idx_bytes (u32), ...requester_id_bytes (u32), ...(field_name_len (u8), ...field_name_bytes, field_value_len (u8), ...field_value_bytes)>` |
-| Receiver | Available Solvers Result | The result to the available solvers count request you made.<br><br>**Length Collision Fix:** Note, the zero at the end of this packet is dummy data. It is actually added because I made the accepted parsing system for these packets length-based to check packet type, but the token packet will deliver 4 bytes if it fails to receive a token. I added the extra byte to this packet to solve the length collision because no branching logic is required for this one, and it's a much smaller and simpler case so I just preferred it.<br><br>**Structure:** `<...available_solvers_bytes (u32), 0>` |
-
-> **Note:** The clientbound packets do not have headers since each endpoint receives few, easily discernible packets. Receivers receive a packet of only length 1 (Solvers Unavailable), the token packet itself (can be length 4 if there is no token and the request failed), or a packet of length 5 (total available solvers). This makes discerning packets by length easy. The solver can only receive a solve request.
-
-**How it works:**
-
-The architecture for the specific protocol of the server is above. The server assigns an ID to every socket, allows solvers to register themselves, for which it stores into available solver buckets (HashSets accessed by an outer HashMap that uses the respective user-agents as keys, meaning you can refer to solvers with specific user-agents only). Receivers can then simply send packets to the server to request solves from solvers, which if the solvers are available the server will forward. The solvers will send the solve results to the server, which will then forward it back to the original requester, which it does by bouncing around the original `requester_id` within these packets.
-
----
-
-### 4. Proxy Extensions
-
-The extensions allow us to utilize browser proxy API capabilities to connect to proxies, per tab. They also have JS API anti-fingerprint/spoof metrics, along with a WebRTC host peeking block.
-
-For each browser you'll be using, you'll need to add the respective extension for that browser from `proxy-extensions` to whatever browser you are using (ex. cdp for cdp browsers, truly a shocker), and run it. These extensions provide the API necessary for asynchronous proxy connections, allowing you to await and connect to a proxy before continuing execution.
-
-**Setup:**
-
-1. **Set your file paths**
-   Set PROXIES_LIST_PATH, OVERRIDE_FILE_PATH, and INJECT_CONFIG_FILE_PATH in `background.js`. Names are self explanatory. Note the proxy list should be a linesplit list of proxies following the expected format discussed earlier in this readme.
-
-2. **Set inject config**
-   Set SITEKEY, PROXY_CONNECT_TIMEOUT, USE_PROXY_SOLVING, and TOKEN_SERVER_HOST in your text config. A file with example values is provided in the `proxy-extensions` directory. These names should also be self explanatory. These values are injected as `localStorage` values into your page, and your harvester `index.html` reads and uses them. 
-
-Then just load the extension of course.
-
-## How It Works
-
-Each extension acts as a bridge for proxy routing and fingerprint spoofing, driven by `window.postMessage` events. The execution flow follows something like this:
-
-0. **Page Injections and Debugger Injections**
-   localStorage config edits are immediately injected upon page load. File paths for proxies and the override are now read by the extension too and th e file contents can be parsed. Additionally, the extension can attach cdp debuggers to any site (except for privileged chrome:// pages of course), and these debuggers can listen for outgoing web requests, and check if the info for the webrequest that went out matches the site we are currently on, and if it does it returns the override script back instead of the actual site page. 
-
-1. **Initialization**
-   The extension listens for a `SET_TAB_PROXY` message sent by the client (which our solvers use). This payload contains the target proxy details and the specific JavaScript field data you want to spoof. *(Note: See the token server section for details on structuring this field data).*
-
-2. **Proxy Routing**
-   The extension applies the requested proxy. Because protocols vary by browser, this is handled in one of two ways: it either establishes a direct proxy connection for the tab, or it actively listens for outgoing requests and applies the proxy details to them on the fly.
-
-3. **JS API Spoofing**
-   The requested JavaScript APIs are spoofed by overriding native prototypes. This is done using a hidden Symbol key reference pointing to a modifiable entry. This architecture is critical: it allows our script to dynamically overwrite fields with new values without breaking the page, while completely hiding the spoofing metrics from anti-bot systems like Cloudflare.
-
-4. **WebRTC Leak Prevention**
-   To maintain operational security, WebRTC host peeking and STUN search features are disabled. This strictly blocks WebRTC host IP leaks while keeping standard WebRTC functionality enabled.
-
-5. **matchMedia Protection**
-   `matchMedia`, a method that runs on the CSS engine, can get your real window dimensions if you spoof standard JS window dimension values. It can check and compare values like `width`/`min-width`/`max-width`, or `height`/`min-height`/`max-height`. `matchMedia` returns data in a `matches` property of the response structure, which is a boolean determining if the given query matches or aligns with the actual session's data. 
-
-   If you provide `window.innerWidth` and `window.innerHeight` fields (though to fully spoof well, you'll need to spoof other fields—these just trigger the feature, as mediaQuery compares all pixel data in relation to those dimensions), `matchMedia` will be spoofed. For width and height checks, it will force the `matches` field to output the exact result it would give if your window were actually the dimensions of your spoofed `window.innerWidth` and `window.innerHeight`.
-
-7. **Execution Readiness**
-   Once the proxy is fully connected and the environment is secured, the extension sends a `PROXY_READY` message back to the client. This allows solvers to securely await a confirmed proxy connection before continuing their execution.
-
----
-
-## Starting It Up
-
-### Docker (recommended)
-
-The image runs the token server, the OS-level clicker, and a **headed** Google Chrome on a virtual framebuffer (Xvfb). Chrome is **not** launched with `--headless` — that flag changes the user-agent, WebGL, and window metrics enough for Cloudflare to treat the session as a bot. Xvfb gives Chrome a real X11 screen so it still thinks it is a desktop browser.
-
-**1. Configure**
+## Quick start
 
 ```bash
 cp .env.example .env
-```
-
-Edit `config/inject_config.txt`:
-
-```
-SITEKEY: <your turnstile sitekey>
-PROXY_CONNECT_TIMEOUT: 5000
-USE_PROXY_SOLVING: false
-TOKEN_SERVER_HOST: ws://127.0.0.1:8080
-```
-
-If you want per-tab proxies, put them in `config/proxies.txt` (one `protocol://host:port` per line) and set `USE_PROXY_SOLVING: true`.
-
-**2. Run**
-
-```bash
 docker compose up --build
 ```
 
-Wait until the logs show the stack is up **and** a solver has registered:
+Wait until the logs show the cookie API is listening:
 
 ```
-[+] Solver 0 added to queue. Total available for UA '...': 1.
+[entrypoint]   cookie API   http://0.0.0.0:8081/v1/cookies
 ```
 
-If you only see Chrome launching and no solver line, the override did not load — set `ENABLE_VNC=1` and check that Chrome is running.
+---
 
-The token server listens on `ws://localhost:8080`. The cookie API listens on `http://localhost:8081`.
+## Use from Python
 
-**3. Load a site and get cookies**
+Install the client package (from the repo root):
 
-Chrome starts on `about:blank`. Pass any URL to the cookie API — it opens a tab, waits for the page to finish loading (up to 60s by default), returns cookies, and closes the tab.
+```bash
+pip install -e solver
+pip install curl_cffi   # optional, for the example below
+```
 
 ```python
 import solver
 import curl_cffi
 
 browser = solver.setup("127.0.0.1", 8081)
-url = "https://example.com"
-cookies = browser.get_all_cookies(url)
-response = curl_cffi.get(url, impersonate="chrome", cookies=cookies)
+
+URL = "https://example.com"
+cookies = browser.get_all_cookies(URL)
+
+response = curl_cffi.get(URL, impersonate="chrome", cookies=cookies)
+print(response.status_code)
 ```
 
-Or from the shell:
+### `get_all_cookies(url, timeout=60, min_wait=0)`
+
+| Parameter | Default | Description |
+| :--- | :--- | :--- |
+| `url` | — | Site to open in the browser. |
+| `timeout` | `60` | Max seconds to wait for the page to load. |
+| `min_wait` | `0` | Minimum seconds to keep the tab open after load. Useful when the site redirects and cookies are set on a later hop. Resets if the URL changes during the wait. |
+
+Returns a `dict[str, str]` mapping cookie name to value, ready for `curl_cffi` or `requests`.
+
+```python
+# Wait up to 60s for load, then stay on the page at least 5s more
+cookies = browser.get_all_cookies("https://example.com", timeout=60, min_wait=5.0)
+```
+
+Full cookie metadata (domain, path, `secure`, etc.) is available via `browser.get_cookie_details(url, ...)`.
+
+### Shell smoke test
 
 ```bash
 python3 examples/test_cookies.py https://example.com
-pip install curl_cffi
 python3 examples/fetch_with_cookies.py https://example.com
 ```
 
-Install the client package with `pip install -e solver` from the repo root.
+### HTTP API (any language)
 
-**4. Request a token** (requires `PAGE_OVERRIDE=1`)
+```http
+POST http://localhost:8081/v1/cookies
+Content-Type: application/json
 
-```bash
-# how many browser solvers are idle
-python3 examples/request_token.py --count
-
-# block until one token comes back (printed to stdout)
-python3 examples/request_token.py
-
-# optional: turnstile.render extras + JS spoofs
-python3 examples/request_token.py \
-  --field action=login \
-  --field cData=abc123 \
-  --field window.innerWidth=1920 \
-  --field window.innerHeight=1080
+{"url": "https://example.com", "timeout": 60, "min_wait": 5.0}
 ```
 
-`examples/request_token.py` is stdlib-only. A non-zero exit means no solver was registered, the solve failed, or the server was unreachable.
+Response:
 
-**5. Optional: watch the display**
-
-```bash
-ENABLE_VNC=1 docker compose up
-# then connect a VNC client to localhost:5900
-```
-
-Useful environment variables (compose / `.env`):
-
-| Variable | Default | Purpose |
-| :--- | :--- | :--- |
-| `COOKIE_SERVER_PORT` | `8081` | Host port for the cookie API (`POST /v1/cookies`). |
-| `PAGE_OVERRIDE` | `0` | `1` replaces navigations with the token harvester. |
-| `CLICKER_ENABLED` | `1` | Start the checkbox clicker without pressing F8. |
-| `BROWSER_COUNT` | `1` | How many Chrome windows (each gets its own profile). |
-| `SCREEN_WIDTH` / `SCREEN_HEIGHT` | `1920` / `1080` | Xvfb and window size. |
-| `ENABLE_VNC` | `0` | Set `1` and connect a VNC client to `localhost:5900` to watch the virtual display. |
-| `CHROME_NO_SANDBOX` | `1` | Passes `--no-sandbox` to Chrome. See below. |
-
-Chrome profiles persist in the `chrome-profile` volume so the extension install and browser state survive restarts.
-
-### Chrome `--no-sandbox`
-
-The image starts Chrome with `--no-sandbox` (`CHROME_NO_SANDBOX=1`) because Chrome's own sandbox usually cannot start inside Docker (user namespaces, seccomp, and missing `SYS_ADMIN` / setuid helper).
-
-That is a real security trade-off, not just a convenience flag:
-
-- Chrome's sandbox is what keeps a compromised **renderer** (the process that parses HTML/JS from `TARGET_URL`) from taking over the rest of the browser.
-- With `--no-sandbox`, a Chrome renderer exploit runs with the same privileges as the browser process — here, the unprivileged `solver` user inside the container.
-- Combined with a container that is `--privileged`, has `SYS_ADMIN`, or mounts the Docker socket / host filesystem, that can become a host compromise.
-- Remote DevTools (port `9222`) is equivalent to full control of the browser profile (cookies, sessions, further navigation). Compose binds it to `127.0.0.1` only; do not publish it on `0.0.0.0`.
-
-Practical limits if you keep the default:
-
-- Do not point the cookie API at pages you do not trust.
-- Do not run the container as root, `--privileged`, or with host mounts you care about.
-- Leave the CDP publish on loopback.
-
-To try Chrome's real sandbox instead (it may still fail to start):
-
-```yaml
-environment:
-  CHROME_NO_SANDBOX: "0"
-cap_add:
-  - SYS_ADMIN
-security_opt:
-  - seccomp=unconfined
-```
-
-Note that granting `SYS_ADMIN` and disabling seccomp **widens** the container's attack surface in order to restore Chrome's inner sandbox. Prefer the default (`--no-sandbox` in an otherwise tight container) unless you have a reason to invert that.
-
-### Manual (desktop)
-
-1. Start the **token server**.
-2. Start the **auto-clicker**.
-3. Open your **modified webpages**.
-4. Press **F8** to enable the auto-clicker.
-5. Start your backend, token managing and requesting system.
-6. Watch it go.
-
----
-
-## Some Helpers for your Backend
-
-Your backend that actually gets and requests solves for tokens will need to interact with the token server. 
-
-You will need a reference to a proxies txt list. This list should match the one you set at localStorage.proxies on the solver page.
-
-For any turnstile render call custom fields, such as "cData" or "action" as previously mentioned, you'll need to figure out how they are generated for your target, and recreate the logic to how these fields are generated so that you can pass them into your solve request packet. "action" is usually a hardcoded string, but "cData" is often used as an individual ID/verification field. In short, ensure all fields of the turnstile render call match.
-
-For any JavaScript API fields you'd like to spoof, you'll also need to send that data into the fields arguments of the construct_solver_request_packet. Details on how to structure the fields data is provided in previous sections (see token server section).
-
-**Construct solve request packet:**
-
-```javascript
-// proxy_idx = literally just the index of your proxy in the proxy list.
-// user_agent = user-agent string of the target you want to run (matches to navigator.userAgent). 
-// fields = object, { name: value, name2: value2, ... namen: valuen }. Names and values are strings.
-function construct_solver_request_packet(proxy_idx, user_agent = "", fields = {}) {
-   let encoder = new TextEncoder();
-   let packet = Array(5);
-   packet[0] = 1;
-   packet[1] = proxy_idx & 255;
-   packet[2] = (proxy_idx >> 8) & 255;
-   packet[3] = (proxy_idx >> 16) & 255;
-   packet[4] = (proxy_idx >> 24) & 255;
-   let user_agent_bytes = encoder.encode(user_agent);
-   packet[5] = user_agent_bytes.length;
-   packet.push(...user_agent_bytes);
-   for (let field_name in fields) {
-         let field_value = fields[field_name];
-         let field_name_bytes = encoder.encode(field_name);
-         let field_value_bytes = encoder.encode(field_value);
-         let field_name_len = field_name_bytes.length;
-         let field_value_len = field_value_bytes.length;
-         packet.push(field_name_len);
-         packet.push(...field_name_bytes);
-         packet.push(field_value_len);
-         packet.push(...field_value_bytes);
-   }
-   return new Uint8Array(packet);
-};
-```
-
-**Parse token response packet:**
-
-```javascript
-// packet = packet buffer.
-function parse_token_response_packet(packet) {
-    let view = new DataView(packet);
-    let solver_idx = view.getUint32(0, true);
-    let token = undefined;
-    if (packet.length > 4) {
-      let u8 = new Uint8Array(packet);
-      token = new TextDecoder().decode(u8.subarray(4));
-    }
-    return [solver_idx, token];
-};
-```
-
-**Parse available solvers packet:**
-
-```javascript
-// packet = packet buffer.
-function parse_available_solvers_count_packet(packet) {
-    let view = new DataView(packet);
-    return [view.getUint32(0, true)];
-};
-```
-
-**Match packets:**
-
-```javascript
-// packet = packet buffer
-if (packet.byteLength > 5) {
-   // Token Packet
-} else if (packet.byteLength == 5) {
-   // Available Solvers Result
-} else if (packet.byteLength == 4) {
-   // Failed Token Result (only solver idx is sent back)
-} else {
-   // Solvers Unavailable
+```json
+{
+  "url": "https://example.com",
+  "cookies": [
+    {"name": "session", "value": "...", "domain": ".example.com", "path": "/", ...}
+  ]
 }
 ```
 
 ---
 
-## Future Plans/What this Needs (may not be done, but if major updates do occur to this project it will likely be these).
+## Configuration
 
-Automatic, headless page loading with a docker. Plus Devtools protocol level overriding so standard overrides aren't required. Dockerizing and making this project headless could be huge for maximizing throughput. Plus it'd just make it feel less like a PoC and more like a fully fleshed out project. Do note, however, that due to the extreme CPU usage caused by browsers running Turnstile either way, that the benefits of the headless browser won't be as extreme, since CPU and not RAM is the main bottleneck due to all the tough JS challenges executed by Cloudflare especially. This would still serve as an optimization assuming it didn't result in Cloudflare flagging these sessions. Also you'd haevto lose the OS level click in favor of a browser protocol level click which isn't a huge issue but it is a difference. Point is it'd take a lot of work.
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `COOKIE_SERVER_PORT` | `8081` | Host port for the cookie API. |
+| `TOKEN_SERVER_PORT` | `8080` | Host port for the token WebSocket (harvesting mode). |
+| `PAGE_OVERRIDE` | `0` | `1` enables token-harvester page replacement. |
+| `BROWSER_COUNT` | `1` | Number of Chrome windows. |
+| `ENABLE_VNC` | `0` | Set `1` to watch the virtual display on port `5900`. |
 
-WebGL debug info spoofing (currently items like vendor are not spoofed, however without proper canvas fingerprinting to associate with these modifying such fields could make you get flagged, especially on browsers like Chrome where by default there is no anti-canvas fingerprinting).
-
-Canvas fingerprint spoofing to match given hardware specs.
-
-If a feasible solution is found, a way to tunnel individual iframes (hence enhancing multi-proxy solving outside of just different tabs) may be implemented.
-
----
-
-## Contributing
-
-All contributions are very welcome. If you have a way to improve this project, please share with issues, pull requests, etc.
+See `.env.example` and [DEVELOPMENT.md](DEVELOPMENT.md#docker) for the full list.
 
 ---
+
+## License
+
+See [LICENSE](LICENSE).
