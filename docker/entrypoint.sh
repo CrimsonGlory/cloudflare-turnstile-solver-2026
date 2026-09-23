@@ -13,8 +13,8 @@ export ENABLE_VNC="${ENABLE_VNC:-0}"
 export VNC_PORT="${VNC_PORT:-5900}"
 export BROWSER_COUNT="${BROWSER_COUNT:-1}"
 export CHROME_NO_SANDBOX="${CHROME_NO_SANDBOX:-1}"
-export TARGET_URL="${TARGET_URL:-}"
 export PAGE_OVERRIDE="${PAGE_OVERRIDE:-0}"
+export COOKIE_SERVER_PORT="${COOKIE_SERVER_PORT:-8081}"
 export CHROME_REMOTE_DEBUGGING="${CHROME_REMOTE_DEBUGGING:-1}"
 export CDP_PORT="${CDP_PORT:-9222}"
 export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
@@ -236,9 +236,9 @@ chrome_features="TranslateUI,ChromeWhatsNewUI,PrivacySandboxSettings4"
 if [[ "${PAGE_OVERRIDE}" == "1" ]]; then
     chrome_features+=",DisableLoadExtensionCommandLineSwitch"
     chrome_base_flags+=(--load-extension="${EXT_DIR}")
-    echo "[entrypoint] PAGE_OVERRIDE=1 — extension will replace TARGET_URL with the harvester"
+    echo "[entrypoint] PAGE_OVERRIDE=1 — extension will replace navigations with the harvester"
 else
-    echo "[entrypoint] PAGE_OVERRIDE=0 — Chrome loads TARGET_URL for real"
+    echo "[entrypoint] PAGE_OVERRIDE=0 — URLs are loaded on demand via the cookie API"
 fi
 chrome_base_flags+=(--disable-features="${chrome_features}")
 
@@ -250,11 +250,6 @@ if [[ "${CHROME_REMOTE_DEBUGGING}" == "1" ]]; then
         --remote-debugging-address=127.0.0.1
         --remote-allow-origins=*
     )
-fi
-
-if [[ -z "${TARGET_URL}" ]]; then
-    echo "[entrypoint] WARNING: TARGET_URL is not set. Chrome will open about:blank."
-    echo "[entrypoint] Set TARGET_URL to the site to open."
 fi
 
 # /usr/bin/google-chrome-stable is a wrapper that starts the real binary
@@ -288,7 +283,7 @@ launch_chrome() {
     profile="$(chrome_profile "${index}")"
     local pos_x=$((index * 48))
     local pos_y=$((index * 48))
-    local url="${TARGET_URL:-about:blank}"
+    local url="about:blank"
     mkdir -p "${profile}"
 
     # A previous SIGKILL leaves these behind; Chrome then exits at once.
@@ -348,19 +343,24 @@ fi
 if [[ "${CHROME_REMOTE_DEBUGGING}" == "1" ]]; then
     export CDP_PROXY_PORT="${CDP_PROXY_PORT:-9223}"
     python3 /app/examples/cdp_proxy.py >/tmp/cdp-proxy.log 2>&1 &
-    echo "[entrypoint] Starting auto-browse helper (title watch)"
-    python3 /app/examples/auto_browse.py >/proc/1/fd/1 2>/proc/1/fd/2 &
 fi
+
+echo "[entrypoint] Starting cookie server on 0.0.0.0:${COOKIE_SERVER_PORT}"
+PYTHONPATH=/app python3 -m cookie_server \
+    --host 0.0.0.0 \
+    --port "${COOKIE_SERVER_PORT}" \
+    --cdp "http://127.0.0.1:${CDP_PORT}" \
+    >/proc/1/fd/1 2>/proc/1/fd/2 &
+COOKIE_SERVER_PID=$!
 
 echo "[entrypoint] Stack is up."
 echo "[entrypoint]   display      ${DISPLAY} (${SCREEN_WIDTH}x${SCREEN_HEIGHT})"
 echo "[entrypoint]   token server ws://0.0.0.0:8080"
+echo "[entrypoint]   cookie API   http://0.0.0.0:${COOKIE_SERVER_PORT}/v1/cookies"
 echo "[entrypoint]   browsers     ${BROWSER_COUNT}"
-echo "[entrypoint]   target       ${TARGET_URL:-about:blank}"
 echo "[entrypoint]   override     ${PAGE_OVERRIDE}"
 echo "[entrypoint]   cdp          $([[ "${CHROME_REMOTE_DEBUGGING}" == "1" ]] && echo "0.0.0.0:${CDP_PORT}" || echo "disabled")"
 echo "[entrypoint]   vnc          $([[ "${ENABLE_VNC}" == "1" ]] && echo "port ${VNC_PORT}" || echo "disabled")"
-echo "[entrypoint] z-index-orderer is Windows-only and is not started in this image."
 
 # Keep the container alive while the core processes run. Restart Chrome if
 # a window dies; exit if the token server or clicker dies.
@@ -371,6 +371,10 @@ while true; do
     fi
     if ! kill -0 "${CLICKER_PID}" 2>/dev/null; then
         echo "[entrypoint] turnstile-clicker exited" >&2
+        exit 1
+    fi
+    if ! kill -0 "${COOKIE_SERVER_PID}" 2>/dev/null; then
+        echo "[entrypoint] cookie server exited" >&2
         exit 1
     fi
     for i in $(seq 0 $((BROWSER_COUNT - 1))); do

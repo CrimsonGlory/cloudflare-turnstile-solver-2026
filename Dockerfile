@@ -5,8 +5,7 @@
 # fingerprint stays that of a real desktop session.
 
 # ---------------------------------------------------------------------------
-# Build the two Linux-capable Rust binaries.
-# z-index-orderer is Windows-only and is not built here.
+# Build the two Linux Rust binaries.
 # ---------------------------------------------------------------------------
 FROM rust:bookworm AS builder
 
@@ -111,6 +110,8 @@ COPY docker /opt/solver/docker
 COPY docker /app/docker
 COPY config /app/config
 COPY examples /app/examples
+COPY cookie_server /app/cookie_server
+COPY solver /app/solver
 
 RUN chmod +x /opt/solver/docker/entrypoint.sh \
               /opt/solver/docker/pack_extension.sh \
@@ -127,7 +128,7 @@ RUN chmod +x /opt/solver/docker/entrypoint.sh \
 USER solver
 WORKDIR /app
 
-EXPOSE 8080 5900 9222
+EXPOSE 8080 8081 5900 9222
 
 VOLUME ["/data", "/app/config"]
 

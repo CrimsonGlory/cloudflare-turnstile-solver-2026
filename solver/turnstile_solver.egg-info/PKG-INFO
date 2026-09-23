@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: turnstile-solver
+Version: 0.1.0
+Summary: Client for the Cloudflare Turnstile solver browser cookie server
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown

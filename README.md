@@ -116,13 +116,12 @@ The http protocol is recommended. Some browsers have iffy implementation for soc
 
 ## Components
 
-The bypass is comprised of five main components:
+The bypass is comprised of four main components:
 
 1. **Token Harvester / Turnstile Widget Loader**
 2. **Turnstile Widget Identifier & Clicker**
 3. **Token Server**
 4. **Proxy Extensions**
-5. **Z-index Orderer**
 
 ---
 
@@ -243,45 +242,16 @@ Each extension acts as a bridge for proxy routing and fingerprint spoofing, driv
 
 ---
 
-### 5. Z-index Orderer
-
-**Note this is currently only designed for Windows. Not going to add implementation for other operating systems myself, but pull requests are welcome.**
-
-This component serves as a direct solution to a major issue posed by the OS-level gui clicking: the browser overlap can cause tabs to become unclickable. Since our clicker relies on actual rendered data on our screen, if a browser is covered by another browser, it can become unclickable.
-
-So, to deal with this, this component orders and locks Z-indexes for all browsers, which almost entirely negates the overlap issue. Because Cloudflare Turnstile widgets will only spawn in the top left corner, for each browser, you need only to leave that top left corner non-overlapped per browser window. This means effectively, the spacing for your browser windows only have to be the size of the turnstile checkbox--which is very small. 
-
-This is obviously an insanely large reduction from without z-index ordering and locking, as without such you'd need to individually space out browsers as they could not overlap, as if an interaction was made to a browser with a region previously below another browser that has a checkbox over that region, that checkbox would then become covered as the interacted browser would get the top z-index and then cover the other browser. 
-
-With this, though, newer tabs are always locked above older tabs. Because of this, you simply only need to ensure the checkbox area isn't covered by an newer browser--but the checkbox area can now go over older browsers as those older browsers cannot go above the newer browser (well for a short moment they do, our script polls and corrects this at a very quick rate though so it is negligible)--effectively shrinking the required overlap area to just a checkbox. 
-
-Because of this, the issue regarding gui overlap is effectively not an issue at all. On pure screen area alone, with this change you could certainly spawn at least a hundred checkboxes, maybe more but I'm not doing the math for that. Point is, this allows you to spawn as many browsers as you'll need without facing overlap issues. The only issue becomes standard resource bottlenecks. 
-
-**Setup:**
-
-You can a config value in `main.rs` for a for a z-order enforcement loop/thread rate. Otherwise just dependencies as per usual.
-
-**When you run this, press F7 to turn off the new page checking loop this component runs in order to check for new pages. You can turn it back on by pressing F7 again too. It is toggleable, but on by default so you can add new pages. Once you are done loading pages, you can toggle this off to save performance.**
-
-**How it Works:**
-
-Windows OS uses the "handle to window" (HWND) mechanism to identify different windows. This script first initially gets all pre-existing windows when it first runs and stores their HWNDs, this is used for comparison when checking for new windows so we can ignore windows that were already pre-existing. Then, there are two "worker" threads that we use as loops. One checks for new windows. When a new window is created, it is tracked by its HWND and assigned a hard z-index. The other actually enforces the z-order of all tabs. It simply goes over all tracked windows and actually enforces the z-index by using the `setWindowPos` method. Note newer tabs are placed on top, and older tabs go below. 
-
----
-
 ## Starting It Up
 
 ### Docker (recommended)
 
 The image runs the token server, the OS-level clicker, and a **headed** Google Chrome on a virtual framebuffer (Xvfb). Chrome is **not** launched with `--headless` — that flag changes the user-agent, WebGL, and window metrics enough for Cloudflare to treat the session as a bot. Xvfb gives Chrome a real X11 screen so it still thinks it is a desktop browser.
 
-The Windows-only z-index-orderer is not started in the container.
-
 **1. Configure**
 
 ```bash
 cp .env.example .env
-# TARGET_URL defaults to https://www.upwork.com/ (used by the title test)
 ```
 
 Edit `config/inject_config.txt`:
@@ -307,11 +277,35 @@ Wait until the logs show the stack is up **and** a solver has registered:
 [+] Solver 0 added to queue. Total available for UA '...': 1.
 ```
 
-If you only see Chrome launching and no solver line, the override did not load — set `ENABLE_VNC=1` and check that Chrome is on `TARGET_URL`.
+If you only see Chrome launching and no solver line, the override did not load — set `ENABLE_VNC=1` and check that Chrome is running.
 
-The token server listens on `ws://localhost:8080`.
+The token server listens on `ws://localhost:8080`. The cookie API listens on `http://localhost:8081`.
 
-**3. Request a token**
+**3. Load a site and get cookies**
+
+Chrome starts on `about:blank`. Pass any URL to the cookie API — it opens a tab, waits for the page to finish loading (up to 60s by default), returns cookies, and closes the tab.
+
+```python
+import solver
+import curl_cffi
+
+browser = solver.setup("127.0.0.1", 8081)
+url = "https://example.com"
+cookies = browser.get_all_cookies(url)
+response = curl_cffi.get(url, impersonate="chrome", cookies=cookies)
+```
+
+Or from the shell:
+
+```bash
+python3 examples/test_cookies.py https://example.com
+pip install curl_cffi
+python3 examples/fetch_with_cookies.py https://example.com
+```
+
+Install the client package with `pip install -e solver` from the repo root.
+
+**4. Request a token** (requires `PAGE_OVERRIDE=1`)
 
 ```bash
 # how many browser solvers are idle
@@ -330,17 +324,7 @@ python3 examples/request_token.py \
 
 `examples/request_token.py` is stdlib-only. A non-zero exit means no solver was registered, the solve failed, or the server was unreachable.
 
-**Check that the real site loaded** (not Cloudflare's `Just a moment...`):
-
-```bash
-docker compose exec solver python3 /app/examples/test_site.py --expect Upwork
-# or from the host (CDP is published on localhost:9222)
-python3 examples/test_site.py --expect Upwork
-```
-
-PASS means `<title>` contains `Upwork`. FAIL means the browser is still on the Cloudflare interstitial. `PAGE_OVERRIDE` must stay `0` for this test — the harvester override replaces the real page.
-
-**4. Optional: watch the display**
+**5. Optional: watch the display**
 
 ```bash
 ENABLE_VNC=1 docker compose up
@@ -351,8 +335,8 @@ Useful environment variables (compose / `.env`):
 
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
-| `TARGET_URL` | `https://www.upwork.com/` | Page Chrome opens. With `PAGE_OVERRIDE=0` this is the real site. |
-| `PAGE_OVERRIDE` | `0` | `1` replaces that document with the token harvester. |
+| `COOKIE_SERVER_PORT` | `8081` | Host port for the cookie API (`POST /v1/cookies`). |
+| `PAGE_OVERRIDE` | `0` | `1` replaces navigations with the token harvester. |
 | `CLICKER_ENABLED` | `1` | Start the checkbox clicker without pressing F8. |
 | `BROWSER_COUNT` | `1` | How many Chrome windows (each gets its own profile). |
 | `SCREEN_WIDTH` / `SCREEN_HEIGHT` | `1920` / `1080` | Xvfb and window size. |
@@ -374,7 +358,7 @@ That is a real security trade-off, not just a convenience flag:
 
 Practical limits if you keep the default:
 
-- Do not point `TARGET_URL` at pages you do not trust.
+- Do not point the cookie API at pages you do not trust.
 - Do not run the container as root, `--privileged`, or with host mounts you care about.
 - Leave the CDP publish on loopback.
 
@@ -395,11 +379,10 @@ Note that granting `SYS_ADMIN` and disabling seccomp **widens** the container's 
 
 1. Start the **token server**.
 2. Start the **auto-clicker**.
-3. Start the **z-index-orderer**.
-4. Open your **modified webpages**.
-5. Press **F8** to enable the auto-clicker.
-6. Start your backend, token managing and requesting system. 
-7. Watch it go.
+3. Open your **modified webpages**.
+4. Press **F8** to enable the auto-clicker.
+5. Start your backend, token managing and requesting system.
+6. Watch it go.
 
 ---
 

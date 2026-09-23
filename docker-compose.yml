@@ -9,11 +9,12 @@ services:
     shm_size: "2gb"
     ports:
       - "${TOKEN_SERVER_PORT:-8080}:8080"
+      - "${COOKIE_SERVER_PORT:-8081}:8081"
       # Set ENABLE_VNC=1 to peek at the virtual display.
       - "${VNC_PORT:-5900}:5900"
       - "127.0.0.1:9222:9223"
     environment:
-      TARGET_URL: "${TARGET_URL:-}"
+      COOKIE_SERVER_PORT: "${COOKIE_SERVER_PORT:-8081}"
       SCREEN_WIDTH: "${SCREEN_WIDTH:-1920}"
       SCREEN_HEIGHT: "${SCREEN_HEIGHT:-1080}"
       CLICKER_ENABLED: "${CLICKER_ENABLED:-1}"
@@ -35,7 +36,7 @@ services:
     # --no-sandbox is on by default (CHROME_NO_SANDBOX=1). That disables
     # Chrome's renderer/utility sandbox: a Chrome exploit becomes a
     # container-user compromise. Keep the published CDP port on 127.0.0.1
-    # and do not point TARGET_URL at untrusted pages. To try Chrome's real
+    # and do not point the cookie API at untrusted pages. To try Chrome's real
     # sandbox instead:
     #   CHROME_NO_SANDBOX=0
     #   cap_add: [SYS_ADMIN]
