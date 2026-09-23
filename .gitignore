@@ -2,6 +2,7 @@
 **/target
 __pycache__/
 *.pyc
+*.egg-info/
 .env
 config/proxies.txt
 *.crx

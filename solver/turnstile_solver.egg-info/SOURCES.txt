@@ -1,5 +1,0 @@
-pyproject.toml
-turnstile_solver.egg-info/PKG-INFO
-turnstile_solver.egg-info/SOURCES.txt
-turnstile_solver.egg-info/dependency_links.txt
-turnstile_solver.egg-info/top_level.txt
