@@ -41,6 +41,7 @@ def main() -> int:
             {
                 "url": payload.get("url", args.url),
                 "user_agent": payload.get("user_agent", ""),
+                "headers": payload.get("headers") or {},
                 "cookies": cookies,
             },
             indent=2,

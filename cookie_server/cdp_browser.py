@@ -18,6 +18,54 @@ CF_MARKERS = (
     "enable javascript and cookies",
 )
 
+BROWSER_HEADER_KEYS = (
+    "User-Agent",
+    "Accept-Language",
+    "sec-ch-ua",
+    "sec-ch-ua-mobile",
+    "sec-ch-ua-platform",
+    "sec-ch-ua-platform-version",
+    "sec-ch-ua-full-version-list",
+)
+
+_CAPTURE_HEADERS_JS = """(async () => {
+  const out = {};
+  out["User-Agent"] = navigator.userAgent;
+  const langs = navigator.languages && navigator.languages.length
+    ? navigator.languages
+    : [navigator.language || "en-US"];
+  out["Accept-Language"] = langs
+    .map((lang, i) => (i === 0 ? lang : `${lang};q=${(1 - i * 0.1).toFixed(1)}`))
+    .join(", ");
+  const data = navigator.userAgentData;
+  if (!data) {
+    return out;
+  }
+  out["sec-ch-ua-mobile"] = data.mobile ? "?1" : "?0";
+  out["sec-ch-ua-platform"] = `"${data.platform}"`;
+  out["sec-ch-ua"] = data.brands
+    .map((b) => `"${b.brand}";v="${b.version}"`)
+    .join(", ");
+  try {
+    const hints = await data.getHighEntropyValues(["platformVersion", "fullVersionList"]);
+    out["sec-ch-ua-platform-version"] = `"${hints.platformVersion}"`;
+    out["sec-ch-ua-full-version-list"] = hints.fullVersionList
+      .map((b) => `"${b.brand}";v="${b.version}"`)
+      .join(", ");
+  } catch (e) {}
+  return out;
+})()"""
+
+
+def pick_browser_headers(raw: dict[str, str]) -> dict[str, str]:
+    lower = {key.lower(): value for key, value in raw.items()}
+    picked: dict[str, str] = {}
+    for key in BROWSER_HEADER_KEYS:
+        value = raw.get(key) or lower.get(key.lower())
+        if value:
+            picked[key] = str(value)
+    return picked
+
 
 def get_browser_user_agent(cdp_http: str) -> str:
     url = cdp_http.rstrip("/") + "/json/version"
@@ -160,6 +208,89 @@ class CdpBrowser:
             ]
             raise TimeoutError(f"timed out waiting for {method}")
 
+    async def capture_document_headers(
+        self,
+        url: str,
+        timeout: float = 15.0,
+    ) -> dict[str, str]:
+        target_id: str | None = None
+        session_id: str | None = None
+        try:
+            created = await self.call("Target.createTarget", {"url": "about:blank"})
+            target_id = created["targetId"]
+            attached = await self.call(
+                "Target.attachToTarget",
+                {"targetId": target_id, "flatten": True},
+            )
+            session_id = attached["sessionId"]
+
+            await self.call("Page.enable", session_id=session_id)
+            await self.call("Network.enable", session_id=session_id)
+
+            captured: dict[str, str] = {}
+            headers_found = asyncio.get_event_loop().create_future()
+
+            async def collect_document_headers() -> None:
+                deadline = asyncio.get_event_loop().time() + timeout
+                while asyncio.get_event_loop().time() < deadline:
+                    remaining = deadline - asyncio.get_event_loop().time()
+                    try:
+                        params = await self.wait_for_event(
+                            "Network.requestWillBeSent",
+                            session_id=session_id,
+                            timeout=remaining,
+                        )
+                    except TimeoutError:
+                        return
+
+                    if params.get("type") != "Document":
+                        continue
+
+                    request = params.get("request") or {}
+                    request_url = str(request.get("url") or "")
+                    if request_url.rstrip("/") != url.rstrip("/"):
+                        continue
+
+                    picked = pick_browser_headers(request.get("headers") or {})
+                    if picked and not headers_found.done():
+                        headers_found.set_result(picked)
+                        return
+
+            collector = asyncio.create_task(collect_document_headers())
+            try:
+                nav = await self.call(
+                    "Page.navigate",
+                    {"url": url},
+                    session_id=session_id,
+                    timeout=timeout,
+                )
+                if nav.get("errorText"):
+                    raise RuntimeError(f"navigation failed: {nav['errorText']}")
+
+                try:
+                    captured = await asyncio.wait_for(headers_found, timeout=timeout)
+                except TimeoutError:
+                    captured = {}
+            finally:
+                collector.cancel()
+                try:
+                    await collector
+                except asyncio.CancelledError:
+                    pass
+
+            js_headers = pick_browser_headers(
+                await self.evaluate(_CAPTURE_HEADERS_JS, session_id) or {}
+            )
+            for key, value in js_headers.items():
+                captured.setdefault(key, value)
+            return pick_browser_headers(captured)
+        finally:
+            if target_id:
+                try:
+                    await self.call("Target.closeTarget", {"targetId": target_id})
+                except Exception:
+                    pass
+
     async def evaluate(self, expression: str, session_id: str) -> Any:
         result = await self.call(
             "Runtime.evaluate",
@@ -271,6 +402,49 @@ class CdpBrowser:
                     await self.call("Target.closeTarget", {"targetId": target_id})
                 except Exception:
                     pass
+
+
+def default_browser_headers_probe_url() -> str:
+    port = os.environ.get("FILE_SERVER_PORT", "9377")
+    override = os.environ.get("BROWSER_HEADERS_PROBE_URL")
+    if override:
+        return override
+    return f"http://127.0.0.1:{port}/"
+
+
+async def capture_browser_headers(
+    cdp_http: str,
+    probe_url: str | None = None,
+    timeout: float = 30.0,
+) -> dict[str, str]:
+    probe = probe_url or default_browser_headers_probe_url()
+    await wait_for_cdp(cdp_http, timeout=timeout)
+    browser = await CdpBrowser.connect(cdp_http)
+    try:
+        headers = await browser.capture_document_headers(probe, timeout=timeout)
+    finally:
+        await browser.close()
+
+    if "User-Agent" not in headers:
+        headers["User-Agent"] = get_browser_user_agent(cdp_http)
+    return pick_browser_headers(headers)
+
+
+def save_browser_headers(path: str, headers: dict[str, str]) -> None:
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(pick_browser_headers(headers), fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+
+def load_browser_headers(path: str) -> dict[str, str]:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return pick_browser_headers({str(key): str(value) for key, value in data.items()})
 
 
 async def wait_for_cdp(cdp_http: str, timeout: float = 30.0) -> None:

@@ -48,7 +48,7 @@ class Browser:
         timeout: float | None = None,
         min_wait: float = 0.0,
     ) -> dict[str, Any]:
-        """Load ``url`` and return the full API response (cookies, user_agent, url)."""
+        """Load ``url`` and return the full API response (cookies, headers, user_agent, url)."""
         return self._fetch_cookies_payload(url, timeout=timeout, min_wait=min_wait)
 
     def get_all_cookies(

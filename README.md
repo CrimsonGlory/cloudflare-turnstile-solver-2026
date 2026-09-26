@@ -15,7 +15,7 @@ Changes made in this fork relative to the original project:
 | Area | Change |
 | :--- | :--- |
 | **Cookie API** | New HTTP server on port `8081` (`POST /v1/cookies`). Loads any URL via CDP, collects cookies, closes the tab. |
-| **User-agent** | Captured once at container startup from Chrome CDP and returned as `user_agent` in every cookie response. |
+| **Browser headers** | Captured once at container startup from a real Chrome navigation (CDP) and returned as `headers` in every cookie response (`User-Agent`, `Accept-Language`, `sec-ch-ua*`). |
 | **Python client** | New `solver` package with `setup()`, `get_all_cookies()`, and `fetch_cookies()`. Stdlib-only client; no extra deps for the API itself. |
 | **On-demand loading** | Removed hardcoded `TARGET_URL`. Chrome starts on `about:blank`; URLs are passed per request. |
 | **`min_wait`** | Optional minimum wait after page load so redirect chains and late cookie writes are captured. |
@@ -61,13 +61,13 @@ browser = solver.setup("127.0.0.1", 8081)
 URL = "https://example.com"
 result = browser.fetch_cookies(URL)
 cookies = {c["name"]: c["value"] for c in result["cookies"]}
-user_agent = result["user_agent"]
+headers = result["headers"]
 
 response = curl_cffi.get(
     URL,
     impersonate="chrome",
     cookies=cookies,
-    headers={"User-Agent": user_agent},
+    headers=headers,
 )
 print(response.status_code)
 ```
@@ -91,9 +91,9 @@ Full cookie metadata (domain, path, `secure`, etc.) is available via `browser.ge
 
 ### `fetch_cookies(url, timeout=60, min_wait=0)`
 
-Returns the full API response as a `dict` with `url`, `cookies` (CDP objects), and `user_agent`. Use this when you need the browser's exact user-agent string alongside the cookies.
+Returns the full API response as a `dict` with `url`, `cookies` (CDP objects), `headers`, and `user_agent` (alias for `headers["User-Agent"]`). Use `headers` when replaying the browser session with `curl_cffi` or `requests`.
 
-The user-agent is read from `/data/user_agent.txt` inside the container. It is captured once at startup from Chrome's CDP `/json/version` endpoint, so it matches the real headed browser session.
+Headers are read from `/data/browser_headers.json` inside the container. They are captured once at startup by opening a local page in Chrome and recording the real outbound request headers via CDP, including client hints (`sec-ch-ua*`) and `Accept-Language`.
 
 ### Shell smoke test
 
@@ -117,13 +117,22 @@ Response:
 {
   "url": "https://example.com",
   "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ...",
+  "headers": {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ...",
+    "Accept-Language": "en-US,en;q=0.9",
+    "sec-ch-ua": "\"Chromium\";v=\"131\", \"Google Chrome\";v=\"131\", \"Not_A Brand\";v=\"24\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"Linux\"",
+    "sec-ch-ua-platform-version": "\"6.12.0\"",
+    "sec-ch-ua-full-version-list": "\"Chromium\";v=\"131.0.6778.85\", ..."
+  },
   "cookies": [
     {"name": "session", "value": "...", "domain": ".example.com", "path": "/", ...}
   ]
 }
 ```
 
-Use the returned `user_agent` with your HTTP client so follow-up requests match the browser session that produced the cookies.
+Pass the returned `headers` dict to your HTTP client so follow-up requests match the browser session that produced the cookies.
 
 ---
 
@@ -132,7 +141,7 @@ Use the returned `user_agent` with your HTTP client so follow-up requests match 
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
 | `COOKIE_SERVER_PORT` | `8081` | Host port for the cookie API. |
-| `USER_AGENT_FILE` | `/data/user_agent.txt` | Path inside the container where the startup-captured browser user-agent is stored. |
+| `BROWSER_HEADERS_FILE` | `/data/browser_headers.json` | Path inside the container where startup-captured browser headers are stored. |
 | `TOKEN_SERVER_PORT` | `8080` | Host port for the token WebSocket (harvesting mode). |
 | `PAGE_OVERRIDE` | `0` | `1` enables token-harvester page replacement. |
 | `BROWSER_COUNT` | `1` | Number of Chrome windows. |

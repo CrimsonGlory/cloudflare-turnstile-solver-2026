@@ -344,32 +344,31 @@ if [[ "${CHROME_REMOTE_DEBUGGING}" == "1" ]]; then
     export CDP_PROXY_PORT="${CDP_PROXY_PORT:-9223}"
     python3 /app/examples/cdp_proxy.py >/tmp/cdp-proxy.log 2>&1 &
 
-    USER_AGENT_FILE="${USER_AGENT_FILE:-${DATA_DIR}/user_agent.txt}"
-    export USER_AGENT_FILE
-    echo "[entrypoint] Capturing browser user-agent to ${USER_AGENT_FILE}"
+    BROWSER_HEADERS_FILE="${BROWSER_HEADERS_FILE:-${DATA_DIR}/browser_headers.json}"
+    export BROWSER_HEADERS_FILE
+    export FILE_SERVER_PORT
+    echo "[entrypoint] Capturing browser headers to ${BROWSER_HEADERS_FILE}"
     PYTHONPATH=/app python3 - <<'PY'
 import asyncio
 import os
 
-from cookie_server.cdp_browser import get_browser_user_agent, wait_for_cdp
+from cookie_server.cdp_browser import capture_browser_headers, save_browser_headers
 
 cdp = f"http://127.0.0.1:{os.environ['CDP_PORT']}"
-path = os.environ["USER_AGENT_FILE"]
+path = os.environ["BROWSER_HEADERS_FILE"]
 
 async def main() -> None:
-    await wait_for_cdp(cdp, timeout=30.0)
-    ua = get_browser_user_agent(cdp)
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(ua)
-    print(f"[entrypoint] Saved user-agent ({len(ua)} bytes) to {path}")
+    headers = await capture_browser_headers(cdp, timeout=30.0)
+    save_browser_headers(path, headers)
+    print(f"[entrypoint] Saved {len(headers)} browser headers to {path}")
 
 asyncio.run(main())
 PY
 fi
 
 echo "[entrypoint] Starting cookie server on 0.0.0.0:${COOKIE_SERVER_PORT}"
-USER_AGENT_FILE="${USER_AGENT_FILE:-${DATA_DIR}/user_agent.txt}"
-export USER_AGENT_FILE
+BROWSER_HEADERS_FILE="${BROWSER_HEADERS_FILE:-${DATA_DIR}/browser_headers.json}"
+export BROWSER_HEADERS_FILE
 PYTHONPATH=/app python3 -m cookie_server \
     --host 0.0.0.0 \
     --port "${COOKIE_SERVER_PORT}" \

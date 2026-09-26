@@ -12,14 +12,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
-from cookie_server.cdp_browser import CdpBrowser, default_cdp_http, wait_for_cdp
+from cookie_server.cdp_browser import (
+    CdpBrowser,
+    default_cdp_http,
+    load_browser_headers,
+    wait_for_cdp,
+)
 
 DEFAULT_PORT = 8081
 DEFAULT_TIMEOUT = 60.0
-DEFAULT_USER_AGENT_FILE = "/data/user_agent.txt"
+DEFAULT_BROWSER_HEADERS_FILE = "/data/browser_headers.json"
 
 _cdp_http = default_cdp_http()
-_user_agent_file = os.environ.get("USER_AGENT_FILE", DEFAULT_USER_AGENT_FILE)
+_browser_headers_file = os.environ.get("BROWSER_HEADERS_FILE", DEFAULT_BROWSER_HEADERS_FILE)
 _loop: asyncio.AbstractEventLoop | None = None
 _loop_thread: threading.Thread | None = None
 _browser: CdpBrowser | None = None
@@ -51,12 +56,8 @@ def _run(coro):
     return future.result()
 
 
-def _load_user_agent() -> str:
-    try:
-        with open(_user_agent_file, encoding="utf-8") as fh:
-            return fh.read().strip()
-    except OSError:
-        return ""
+def _load_browser_headers() -> dict[str, str]:
+    return load_browser_headers(_browser_headers_file)
 
 
 async def _ensure_browser() -> CdpBrowser:
@@ -151,9 +152,15 @@ class CookieHandler(BaseHTTPRequestHandler):
             self._send_json(500, {"error": str(exc)})
             return
 
+        headers = _load_browser_headers()
         self._send_json(
             200,
-            {"url": url, "cookies": cookies, "user_agent": _load_user_agent()},
+            {
+                "url": url,
+                "cookies": cookies,
+                "headers": headers,
+                "user_agent": headers.get("User-Agent", ""),
+            },
         )
 
 

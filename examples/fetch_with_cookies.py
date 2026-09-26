@@ -37,9 +37,20 @@ def main() -> int:
     args = parser.parse_args()
 
     browser = setup(args.host, args.port, timeout=args.timeout)
-    cookies = browser.get_all_cookies(args.url, timeout=args.timeout)
+    result = browser.fetch_cookies(args.url, timeout=args.timeout)
+    cookies = {
+        str(item["name"]): str(item["value"])
+        for item in (result.get("cookies") or [])
+        if "name" in item
+    }
+    headers = dict(result.get("headers") or {})
     print(f"got {len(cookies)} cookies from the browser")
-    response = curl_cffi.get(args.url, impersonate="chrome", cookies=cookies)
+    response = curl_cffi.get(
+        args.url,
+        impersonate="chrome",
+        cookies=cookies,
+        headers=headers,
+    )
     print(f"curl_cffi status={response.status_code}")
     print(response.text[:500])
     return 0
