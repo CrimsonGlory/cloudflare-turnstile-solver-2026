@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import os
+import sys
 import urllib.request
 from typing import Any, Callable
 from urllib.parse import urlparse, urlunparse
@@ -18,6 +19,51 @@ CF_MARKERS = (
     "checking your browser",
     "enable javascript and cookies",
 )
+
+CF_DOM_MARKERS = (
+    "challenge-platform",
+    "cf-mitigated",
+    "cf-browser-verification",
+    "turnstile",
+)
+
+CF_INTERSTITIAL_BODY_LEN = 5371
+
+_PAGE_SNAPSHOT_JS = """(() => ({
+  ready: document.readyState || '',
+  title: document.title || '',
+  href: location.href || '',
+  html: document.documentElement ? document.documentElement.outerHTML : '',
+}))()"""
+
+
+def _challenge_blob(title: str, href: str, html: str) -> str:
+    return f"{title}\n{href}\n{html}".lower()
+
+
+def is_challenge_page(
+    title: str,
+    href: str,
+    html: str,
+    *,
+    body_len: int | None = None,
+) -> bool:
+    blob = _challenge_blob(title, href, html)
+    if any(marker in blob for marker in CF_MARKERS):
+        return True
+    if any(marker in blob for marker in CF_DOM_MARKERS):
+        return True
+    html_len = len(html.encode("utf-8"))
+    if body_len == CF_INTERSTITIAL_BODY_LEN or html_len == CF_INTERSTITIAL_BODY_LEN:
+        return True
+    return False
+
+
+def is_interstitial_body(content: bytes) -> bool:
+    if len(content) == CF_INTERSTITIAL_BODY_LEN:
+        return True
+    text = content.decode("utf-8", errors="replace")
+    return any(marker in text.lower() for marker in CF_DOM_MARKERS + CF_MARKERS)
 
 BROWSER_HEADER_KEYS = (
     "User-Agent",
@@ -499,19 +545,52 @@ class CdpBrowser:
                     pass
 
                 deadline = asyncio.get_event_loop().time() + timeout
+                last_href = ""
+                timed_out_on_challenge = False
                 while asyncio.get_event_loop().time() < deadline:
-                    title = await self.evaluate("document.title || ''", session_id) or ""
-                    href = await self.evaluate("location.href || ''", session_id) or ""
-                    ready = await self.evaluate("document.readyState", session_id) or ""
-                    blob = f"{title}\n{href}".lower()
-                    on_cf = any(marker in blob for marker in CF_MARKERS)
-                    if ready == "complete" and not on_cf:
+                    snapshot = await self.evaluate(_PAGE_SNAPSHOT_JS, session_id) or {}
+                    title = str(snapshot.get("title") or "")
+                    href = str(snapshot.get("href") or "")
+                    ready = str(snapshot.get("ready") or "")
+                    html = str(snapshot.get("html") or "")
+
+                    if href and href != last_href:
+                        if last_href:
+                            try:
+                                remaining = deadline - asyncio.get_event_loop().time()
+                                if remaining > 0:
+                                    await self.wait_for_event(
+                                        "Page.loadEventFired",
+                                        session_id=session_id,
+                                        timeout=remaining,
+                                    )
+                            except TimeoutError:
+                                pass
+                            snapshot = await self.evaluate(_PAGE_SNAPSHOT_JS, session_id) or {}
+                            title = str(snapshot.get("title") or "")
+                            href = str(snapshot.get("href") or "")
+                            ready = str(snapshot.get("ready") or "")
+                            html = str(snapshot.get("html") or "")
+                        last_href = href
+
+                    on_challenge = is_challenge_page(title, href, html)
+                    if ready == "complete" and not on_challenge:
                         break
                     await asyncio.sleep(0.5)
+                else:
+                    snapshot = await self.evaluate(_PAGE_SNAPSHOT_JS, session_id) or {}
+                    title = str(snapshot.get("title") or "")
+                    href = str(snapshot.get("href") or "")
+                    html = str(snapshot.get("html") or "")
+                    timed_out_on_challenge = is_challenge_page(title, href, html)
 
-                await self._wait_minimum(session_id, min_wait, deadline)
+                if not timed_out_on_challenge:
+                    await self._wait_minimum(session_id, min_wait, deadline)
 
-                final_url = await self.evaluate("location.href || ''", session_id) or url
+                snapshot = await self.evaluate(_PAGE_SNAPSHOT_JS, session_id) or {}
+                title = str(snapshot.get("title") or "")
+                final_url = str(snapshot.get("href") or "") or url
+                html = str(snapshot.get("html") or "")
 
                 doc: dict[str, Any] = {}
                 if document_responses:
@@ -524,13 +603,46 @@ class CdpBrowser:
 
                 status_code = int(doc.get("status") or 200)
                 headers = dict(doc.get("headers") or {})
-                content = await self._fetch_response_body(doc.get("requestId"), session_id)
-                if not content:
-                    html = await self.evaluate(
-                        "document.documentElement ? document.documentElement.outerHTML : ''",
-                        session_id,
-                    ) or ""
-                    content = html.encode("utf-8")
+                network_content = await self._fetch_response_body(
+                    doc.get("requestId"), session_id
+                )
+                network_len = len(network_content)
+                outer_html = html
+                outer_len = len(outer_html.encode("utf-8"))
+                bodies_differ = bool(
+                    network_content
+                    and outer_html
+                    and network_content != outer_html.encode("utf-8")
+                )
+
+                if (
+                    network_content
+                    and is_interstitial_body(network_content)
+                    and outer_html
+                    and bodies_differ
+                ):
+                    content = outer_html.encode("utf-8")
+                elif not network_content and outer_html:
+                    content = outer_html.encode("utf-8")
+                else:
+                    content = network_content
+
+                still_challenge = is_challenge_page(
+                    title, final_url, outer_html, body_len=len(content)
+                )
+                if timed_out_on_challenge or still_challenge:
+                    sys.stderr.write(
+                        "[cdp_browser] fetch_page: challenge still present at return "
+                        f"(timed_out={timed_out_on_challenge})\n"
+                    )
+
+                sys.stderr.write(
+                    "[cdp_browser] fetch_page return: "
+                    f"href={final_url!r} title={title!r} "
+                    f"network_len={network_len} outer_len={outer_len} "
+                    f"bodies_differ={bodies_differ} "
+                    f"challenge={still_challenge}\n"
+                )
 
                 cookies_result = await self.call(
                     "Network.getCookies",
