@@ -30,8 +30,22 @@ def main() -> int:
     args = parser.parse_args()
 
     browser = setup(args.host, args.port, timeout=args.timeout)
-    cookies = browser.get_all_cookies(args.url, timeout=args.timeout)
-    print(json.dumps({"url": args.url, "cookies": cookies}, indent=2))
+    payload = browser.fetch_cookies(args.url, timeout=args.timeout)
+    cookies = {
+        str(item["name"]): str(item["value"])
+        for item in (payload.get("cookies") or [])
+        if "name" in item
+    }
+    print(
+        json.dumps(
+            {
+                "url": payload.get("url", args.url),
+                "user_agent": payload.get("user_agent", ""),
+                "cookies": cookies,
+            },
+            indent=2,
+        )
+    )
     return 0
 
 

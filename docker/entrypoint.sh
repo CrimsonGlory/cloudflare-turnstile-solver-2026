@@ -343,9 +343,33 @@ fi
 if [[ "${CHROME_REMOTE_DEBUGGING}" == "1" ]]; then
     export CDP_PROXY_PORT="${CDP_PROXY_PORT:-9223}"
     python3 /app/examples/cdp_proxy.py >/tmp/cdp-proxy.log 2>&1 &
+
+    USER_AGENT_FILE="${USER_AGENT_FILE:-${DATA_DIR}/user_agent.txt}"
+    export USER_AGENT_FILE
+    echo "[entrypoint] Capturing browser user-agent to ${USER_AGENT_FILE}"
+    PYTHONPATH=/app python3 - <<'PY'
+import asyncio
+import os
+
+from cookie_server.cdp_browser import get_browser_user_agent, wait_for_cdp
+
+cdp = f"http://127.0.0.1:{os.environ['CDP_PORT']}"
+path = os.environ["USER_AGENT_FILE"]
+
+async def main() -> None:
+    await wait_for_cdp(cdp, timeout=30.0)
+    ua = get_browser_user_agent(cdp)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(ua)
+    print(f"[entrypoint] Saved user-agent ({len(ua)} bytes) to {path}")
+
+asyncio.run(main())
+PY
 fi
 
 echo "[entrypoint] Starting cookie server on 0.0.0.0:${COOKIE_SERVER_PORT}"
+USER_AGENT_FILE="${USER_AGENT_FILE:-${DATA_DIR}/user_agent.txt}"
+export USER_AGENT_FILE
 PYTHONPATH=/app python3 -m cookie_server \
     --host 0.0.0.0 \
     --port "${COOKIE_SERVER_PORT}" \

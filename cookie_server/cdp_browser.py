@@ -19,6 +19,16 @@ CF_MARKERS = (
 )
 
 
+def get_browser_user_agent(cdp_http: str) -> str:
+    url = cdp_http.rstrip("/") + "/json/version"
+    with urllib.request.urlopen(url, timeout=5) as resp:
+        data = json.loads(resp.read().decode())
+    ua = data.get("User-Agent")
+    if not ua:
+        raise RuntimeError(f"no User-Agent in CDP version at {cdp_http}")
+    return str(ua)
+
+
 def discover_browser_ws(cdp_http: str) -> str:
     url = cdp_http.rstrip("/") + "/json/version"
     with urllib.request.urlopen(url, timeout=5) as resp:
