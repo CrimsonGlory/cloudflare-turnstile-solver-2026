@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -94,6 +95,32 @@ async def fetch_cookies_for_url(
             raise
 
 
+async def fetch_page_for_url(
+    url: str,
+    timeout: float,
+    min_wait: float = 0.0,
+) -> dict[str, Any]:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("url must use http or https")
+    if not parsed.netloc:
+        raise ValueError("url must include a host")
+
+    assert _request_lock is not None
+    async with _request_lock:
+        browser = await _ensure_browser()
+        try:
+            return await browser.fetch_page(url, timeout=timeout, min_wait=min_wait)
+        except (ConnectionError, RuntimeError, TimeoutError):
+            if _browser is not None:
+                try:
+                    await _browser.close()
+                except Exception:
+                    pass
+                globals()["_browser"] = None
+            raise
+
+
 class CookieHandler(BaseHTTPRequestHandler):
     server_version = "CookieServer/1.0"
 
@@ -115,29 +142,44 @@ class CookieHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
-        if self.path != "/v1/cookies":
-            self._send_json(404, {"error": "not found"})
+        if self.path == "/v1/cookies":
+            self._handle_cookies()
             return
+        if self.path == "/v1/get":
+            self._handle_get()
+            return
+        self._send_json(404, {"error": "not found"})
 
+    def _parse_request_body(self) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         length = int(self.headers.get("Content-Length", "0") or 0)
         raw = self.rfile.read(length) if length else b"{}"
         try:
             data = json.loads(raw.decode("utf-8") or "{}")
         except json.JSONDecodeError:
-            self._send_json(400, {"error": "invalid json"})
-            return
+            return None, {"error": "invalid json"}
+        return data, None
 
+    def _parse_url_request(self, data: dict[str, Any]) -> tuple[str | None, float, float, dict[str, Any] | None]:
         url = str(data.get("url", "")).strip()
         timeout = float(data.get("timeout", DEFAULT_TIMEOUT))
         min_wait = float(data.get("min_wait", 0.0))
         if not url:
-            self._send_json(400, {"error": "url is required"})
-            return
+            return None, timeout, min_wait, {"error": "url is required"}
         if timeout <= 0:
-            self._send_json(400, {"error": "timeout must be positive"})
-            return
+            return None, timeout, min_wait, {"error": "timeout must be positive"}
         if min_wait < 0:
-            self._send_json(400, {"error": "min_wait must be >= 0"})
+            return None, timeout, min_wait, {"error": "min_wait must be >= 0"}
+        return url, timeout, min_wait, None
+
+    def _handle_cookies(self) -> None:
+        data, err = self._parse_request_body()
+        if err:
+            self._send_json(400, err)
+            return
+
+        url, timeout, min_wait, err = self._parse_url_request(data or {})
+        if err:
+            self._send_json(400, err)
             return
 
         try:
@@ -160,6 +202,48 @@ class CookieHandler(BaseHTTPRequestHandler):
                 "cookies": cookies,
                 "headers": headers,
                 "user_agent": headers.get("User-Agent", ""),
+            },
+        )
+
+    def _handle_get(self) -> None:
+        data, err = self._parse_request_body()
+        if err:
+            self._send_json(400, err)
+            return
+
+        url, timeout, min_wait, err = self._parse_url_request(data or {})
+        if err:
+            self._send_json(400, err)
+            return
+
+        try:
+            page = _run(fetch_page_for_url(url, timeout, min_wait))
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+        except TimeoutError as exc:
+            self._send_json(504, {"error": str(exc)})
+            return
+        except Exception as exc:
+            self._send_json(500, {"error": str(exc)})
+            return
+
+        request_headers = _load_browser_headers()
+        content = page.get("content") or b""
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+
+        self._send_json(
+            200,
+            {
+                "url": page.get("url", url),
+                "final_url": page.get("final_url", url),
+                "status_code": page.get("status_code", 200),
+                "headers": page.get("headers") or {},
+                "content_b64": base64.b64encode(content).decode("ascii"),
+                "cookies": page.get("cookies") or [],
+                "request_headers": request_headers,
+                "redirects": page.get("redirects") or [],
             },
         )
 

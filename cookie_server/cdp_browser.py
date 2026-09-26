@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import urllib.request
@@ -396,6 +397,163 @@ class CdpBrowser:
                 session_id=session_id,
             )
             return list(cookies_result.get("cookies") or [])
+        finally:
+            if target_id:
+                try:
+                    await self.call("Target.closeTarget", {"targetId": target_id})
+                except Exception:
+                    pass
+
+    async def _fetch_response_body(
+        self,
+        request_id: str | None,
+        session_id: str,
+    ) -> bytes:
+        if not request_id:
+            return b""
+        try:
+            body_result = await self.call(
+                "Network.getResponseBody",
+                {"requestId": request_id},
+                session_id=session_id,
+            )
+        except Exception:
+            return b""
+
+        body = body_result.get("body") or ""
+        if body_result.get("base64Encoded"):
+            return base64.b64decode(body)
+        if isinstance(body, str):
+            return body.encode("utf-8")
+        return bytes(body)
+
+    async def fetch_page(
+        self,
+        url: str,
+        timeout: float = 60.0,
+        min_wait: float = 0.0,
+    ) -> dict[str, Any]:
+        """Load ``url`` and return status, headers, body, final URL, and cookies."""
+        target_id: str | None = None
+        session_id: str | None = None
+        try:
+            created = await self.call("Target.createTarget", {"url": "about:blank"})
+            target_id = created["targetId"]
+            attached = await self.call(
+                "Target.attachToTarget",
+                {"targetId": target_id, "flatten": True},
+            )
+            session_id = attached["sessionId"]
+
+            await self.call("Page.enable", session_id=session_id)
+            await self.call("Network.enable", session_id=session_id)
+
+            document_responses: list[dict[str, Any]] = []
+
+            async def collect_document_responses() -> None:
+                deadline = asyncio.get_event_loop().time() + timeout + min_wait + 5.0
+                while asyncio.get_event_loop().time() < deadline:
+                    remaining = deadline - asyncio.get_event_loop().time()
+                    try:
+                        params = await self.wait_for_event(
+                            "Network.responseReceived",
+                            session_id=session_id,
+                            timeout=min(remaining, 5.0),
+                        )
+                    except TimeoutError:
+                        if asyncio.get_event_loop().time() >= deadline:
+                            return
+                        continue
+
+                    if params.get("type") != "Document":
+                        continue
+
+                    response = params.get("response") or {}
+                    document_responses.append(
+                        {
+                            "status": response.get("status", 200),
+                            "headers": dict(response.get("headers") or {}),
+                            "url": str(response.get("url") or ""),
+                            "requestId": params.get("requestId"),
+                        }
+                    )
+
+            collector = asyncio.create_task(collect_document_responses())
+            try:
+                nav = await self.call(
+                    "Page.navigate",
+                    {"url": url},
+                    session_id=session_id,
+                    timeout=timeout,
+                )
+                if nav.get("errorText"):
+                    raise RuntimeError(f"navigation failed: {nav['errorText']}")
+
+                try:
+                    await self.wait_for_event(
+                        "Page.loadEventFired",
+                        session_id=session_id,
+                        timeout=timeout,
+                    )
+                except TimeoutError:
+                    pass
+
+                deadline = asyncio.get_event_loop().time() + timeout
+                while asyncio.get_event_loop().time() < deadline:
+                    title = await self.evaluate("document.title || ''", session_id) or ""
+                    href = await self.evaluate("location.href || ''", session_id) or ""
+                    ready = await self.evaluate("document.readyState", session_id) or ""
+                    blob = f"{title}\n{href}".lower()
+                    on_cf = any(marker in blob for marker in CF_MARKERS)
+                    if ready == "complete" and not on_cf:
+                        break
+                    await asyncio.sleep(0.5)
+
+                await self._wait_minimum(session_id, min_wait, deadline)
+
+                final_url = await self.evaluate("location.href || ''", session_id) or url
+
+                doc: dict[str, Any] = {}
+                if document_responses:
+                    for candidate in reversed(document_responses):
+                        if candidate["url"].rstrip("/") == final_url.rstrip("/"):
+                            doc = candidate
+                            break
+                    if not doc:
+                        doc = document_responses[-1]
+
+                status_code = int(doc.get("status") or 200)
+                headers = dict(doc.get("headers") or {})
+                content = await self._fetch_response_body(doc.get("requestId"), session_id)
+                if not content:
+                    html = await self.evaluate(
+                        "document.documentElement ? document.documentElement.outerHTML : ''",
+                        session_id,
+                    ) or ""
+                    content = html.encode("utf-8")
+
+                cookies_result = await self.call(
+                    "Network.getCookies",
+                    {"urls": [url, final_url]},
+                    session_id=session_id,
+                )
+                cookies = list(cookies_result.get("cookies") or [])
+
+                return {
+                    "url": url,
+                    "final_url": final_url,
+                    "status_code": status_code,
+                    "headers": headers,
+                    "content": content,
+                    "cookies": cookies,
+                    "redirects": document_responses[:-1] if len(document_responses) > 1 else [],
+                }
+            finally:
+                collector.cancel()
+                try:
+                    await collector
+                except asyncio.CancelledError:
+                    pass
         finally:
             if target_id:
                 try:
