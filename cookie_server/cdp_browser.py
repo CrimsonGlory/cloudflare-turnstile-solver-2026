@@ -14,6 +14,7 @@ from urllib.parse import urlparse, urlunparse
 from cookie_server.ws import ws_close, ws_connect, ws_mask, ws_recv
 
 CF_MARKERS = (
+    "one moment please",
     "just a moment",
     "attention required",
     "checking your browser",
@@ -24,10 +25,11 @@ CF_DOM_MARKERS = (
     "challenge-platform",
     "cf-mitigated",
     "cf-browser-verification",
-    "turnstile",
+    "cf-turnstile",
 )
 
 CF_INTERSTITIAL_BODY_LEN = 5371
+CF_POST_CLICK_BODY_LEN = 5985
 
 _PAGE_SNAPSHOT_JS = """(() => ({
   ready: document.readyState || '',
@@ -35,6 +37,69 @@ _PAGE_SNAPSHOT_JS = """(() => ({
   href: location.href || '',
   html: document.documentElement ? document.documentElement.outerHTML : '',
 }))()"""
+
+_TURNSTILE_IFRAME_JS = """(() => {
+  const selectors = [
+    'iframe[src*="challenges.cloudflare.com"]',
+    'iframe[src*="turnstile"]',
+    'iframe[id^="cf-chl-widget"]',
+    '#challenge-stage iframe',
+    '.cf-turnstile iframe',
+  ];
+  let iframe = null;
+  for (const sel of selectors) {
+    iframe = document.querySelector(sel);
+    if (iframe) break;
+  }
+  if (!iframe) {
+    const widget = document.querySelector('.cf-turnstile');
+    if (widget) {
+      const rect = widget.getBoundingClientRect();
+      if (rect.width >= 1 && rect.height >= 1) {
+        return {
+          x: Math.round(rect.left + Math.min(28, rect.width * 0.15)),
+          y: Math.round(rect.top + rect.height / 2),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        };
+      }
+    }
+    return null;
+  }
+  iframe.scrollIntoView({ block: 'center', inline: 'center' });
+  const rect = iframe.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return null;
+  return {
+    x: Math.round(rect.left + Math.min(28, rect.width * 0.15)),
+    y: Math.round(rect.top + rect.height / 2),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+})()"""
+
+_SUBMIT_TURNSTILE_JS = """(() => {
+  const tokenInput = document.querySelector('[name="cf-turnstile-response"]');
+  const token = tokenInput && tokenInput.value ? String(tokenInput.value).trim() : '';
+  if (!token) {
+    return { submitted: false, reason: 'no_token' };
+  }
+  const btn = document.getElementById('submit-btn');
+  if (btn) {
+    btn.disabled = false;
+    btn.click();
+    return { submitted: true, via: 'button' };
+  }
+  const form = document.getElementById('captcha-form');
+  if (form) {
+    if (typeof form.requestSubmit === 'function') {
+      form.requestSubmit();
+    } else {
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    }
+    return { submitted: true, via: 'form' };
+  }
+  return { submitted: false, reason: 'no_form' };
+})()"""
 
 
 def _challenge_blob(title: str, href: str, html: str) -> str:
@@ -55,6 +120,11 @@ def is_challenge_page(
         return True
     html_len = len(html.encode("utf-8"))
     if body_len == CF_INTERSTITIAL_BODY_LEN or html_len == CF_INTERSTITIAL_BODY_LEN:
+        return True
+    if (
+        body_len is not None
+        and abs(body_len - CF_POST_CLICK_BODY_LEN) <= 80
+    ) or abs(html_len - CF_POST_CLICK_BODY_LEN) <= 80:
         return True
     return False
 
@@ -154,6 +224,8 @@ class CdpBrowser:
         self._event_waiters: list[tuple[str, str | None, asyncio.Future]] = []
         self._recv_task: asyncio.Task | None = None
         self._closed = False
+        self._work_target_id: str | None = None
+        self._work_session_id: str | None = None
 
     @classmethod
     async def connect(cls, cdp_http: str) -> "CdpBrowser":
@@ -165,6 +237,8 @@ class CdpBrowser:
 
     async def close(self) -> None:
         self._closed = True
+        self._work_target_id = None
+        self._work_session_id = None
         if self._recv_task:
             self._recv_task.cancel()
             try:
@@ -353,6 +427,196 @@ class CdpBrowser:
             raise RuntimeError(inner.get("description") or inner)
         return inner.get("value")
 
+    async def _focus_target(self, target_id: str, session_id: str) -> None:
+        """Bring the tab to the foreground so the OS clicker can see Turnstile."""
+        try:
+            await self.call("Target.activateTarget", {"targetId": target_id})
+        except Exception:
+            pass
+        try:
+            await self.call("Page.bringToFront", session_id=session_id)
+        except Exception:
+            pass
+
+    async def _reset_work_tab(self) -> None:
+        if self._work_target_id:
+            try:
+                await self.call("Target.closeTarget", {"targetId": self._work_target_id})
+            except Exception:
+                pass
+        self._work_target_id = None
+        self._work_session_id = None
+
+    async def _ensure_work_tab(self) -> tuple[str, str]:
+        if self._work_target_id and self._work_session_id:
+            try:
+                await self.evaluate("1", self._work_session_id)
+                await self._focus_target(self._work_target_id, self._work_session_id)
+                return self._work_target_id, self._work_session_id
+            except Exception:
+                await self._reset_work_tab()
+
+        created = await self.call("Target.createTarget", {"url": "about:blank"})
+        target_id = created["targetId"]
+        attached = await self.call(
+            "Target.attachToTarget",
+            {"targetId": target_id, "flatten": True},
+        )
+        session_id = attached["sessionId"]
+        await self.call("Page.enable", session_id=session_id)
+        await self.call("Network.enable", session_id=session_id)
+        await self._focus_target(target_id, session_id)
+        self._work_target_id = target_id
+        self._work_session_id = session_id
+        return target_id, session_id
+
+    async def _submit_turnstile_form(self, session_id: str) -> bool:
+        result = await self.evaluate(_SUBMIT_TURNSTILE_JS, session_id)
+        if not isinstance(result, dict):
+            return False
+        if result.get("submitted"):
+            sys.stderr.write(
+                "[cdp_browser] submitted turnstile verification form "
+                f"via {result.get('via', 'unknown')}\n"
+            )
+            return True
+        return False
+
+    async def _click_turnstile(self, session_id: str) -> bool:
+        coords = await self.evaluate(_TURNSTILE_IFRAME_JS, session_id)
+        if not isinstance(coords, dict):
+            return False
+        try:
+            x = float(coords["x"])
+            y = float(coords["y"])
+        except (KeyError, TypeError, ValueError):
+            return False
+
+        for event_type, pressed in (
+            ("mouseMoved", None),
+            ("mousePressed", True),
+            ("mouseReleased", False),
+        ):
+            params: dict[str, Any] = {
+                "type": event_type,
+                "x": x,
+                "y": y,
+                "button": "left",
+                "clickCount": 1,
+            }
+            if pressed is not None:
+                params["buttons"] = 1 if pressed else 0
+            await self.call("Input.dispatchMouseEvent", params, session_id=session_id)
+        return True
+
+    async def _wait_for_page_clearance(
+        self,
+        target_id: str,
+        session_id: str,
+        timeout: float,
+    ) -> tuple[dict[str, Any], bool]:
+        loop = asyncio.get_event_loop()
+        started = loop.time()
+        max_deadline = started + (2 * timeout)
+        last_href = ""
+        last_focus = 0.0
+        last_cdp_click = 0.0
+        last_submit = 0.0
+        last_reload = 0.0
+        stuck_challenge_since: float | None = None
+        reload_count = 0
+        max_reloads = 3
+
+        while loop.time() < max_deadline:
+            now = loop.time()
+            if now - last_focus >= 2.0:
+                await self._focus_target(target_id, session_id)
+                last_focus = now
+
+            snapshot = await self.evaluate(_PAGE_SNAPSHOT_JS, session_id) or {}
+            title = str(snapshot.get("title") or "")
+            href = str(snapshot.get("href") or "")
+            ready = str(snapshot.get("ready") or "")
+            html = str(snapshot.get("html") or "")
+
+            if href and href != last_href:
+                if last_href:
+                    try:
+                        remaining = max_deadline - loop.time()
+                        if remaining > 0:
+                            await self.wait_for_event(
+                                "Page.loadEventFired",
+                                session_id=session_id,
+                                timeout=remaining,
+                            )
+                    except TimeoutError:
+                        pass
+                    await self._focus_target(target_id, session_id)
+                    snapshot = await self.evaluate(_PAGE_SNAPSHOT_JS, session_id) or {}
+                    title = str(snapshot.get("title") or "")
+                    href = str(snapshot.get("href") or "")
+                    ready = str(snapshot.get("ready") or "")
+                    html = str(snapshot.get("html") or "")
+                    stuck_challenge_since = None
+                last_href = href
+
+            on_challenge = is_challenge_page(title, href, html)
+            if on_challenge:
+                if stuck_challenge_since is None:
+                    stuck_challenge_since = now
+                elif (
+                    now - stuck_challenge_since >= 12.0
+                    and reload_count < max_reloads
+                    and now - last_reload >= 12.0
+                ):
+                    sys.stderr.write("[cdp_browser] challenge stuck, reloading tab\n")
+                    await self.call("Page.reload", session_id=session_id)
+                    reload_count += 1
+                    last_reload = now
+                    stuck_challenge_since = None
+                    last_href = ""
+                    try:
+                        await self.wait_for_event(
+                            "Page.loadEventFired",
+                            session_id=session_id,
+                            timeout=min(30.0, max_deadline - loop.time()),
+                        )
+                    except TimeoutError:
+                        pass
+                    continue
+
+                if now - last_submit >= 1.0:
+                    if await self._submit_turnstile_form(session_id):
+                        last_submit = now
+                        stuck_challenge_since = None
+                        try:
+                            await self.wait_for_event(
+                                "Page.loadEventFired",
+                                session_id=session_id,
+                                timeout=min(30.0, max_deadline - loop.time()),
+                            )
+                        except TimeoutError:
+                            pass
+                        continue
+
+                if now - last_cdp_click >= 2.5:
+                    if await self._click_turnstile(session_id):
+                        sys.stderr.write("[cdp_browser] clicked turnstile widget via CDP\n")
+                    last_cdp_click = now
+            else:
+                stuck_challenge_since = None
+
+            if ready == "complete" and not on_challenge:
+                return snapshot, False
+            await asyncio.sleep(0.5)
+
+        snapshot = await self.evaluate(_PAGE_SNAPSHOT_JS, session_id) or {}
+        title = str(snapshot.get("title") or "")
+        href = str(snapshot.get("href") or "")
+        html = str(snapshot.get("html") or "")
+        timed_out = is_challenge_page(title, href, html)
+        return snapshot, timed_out
+
     async def _wait_minimum(
         self,
         session_id: str,
@@ -392,63 +656,45 @@ class CdpBrowser:
         timeout: float = 60.0,
         min_wait: float = 0.0,
     ) -> list[dict]:
-        target_id: str | None = None
-        session_id: str | None = None
+        target_id, session_id = await self._ensure_work_tab()
+        await self._focus_target(target_id, session_id)
+
+        nav = await self.call(
+            "Page.navigate",
+            {"url": url},
+            session_id=session_id,
+            timeout=timeout,
+        )
+        if nav.get("errorText"):
+            raise RuntimeError(f"navigation failed: {nav['errorText']}")
+
         try:
-            created = await self.call("Target.createTarget", {"url": "about:blank"})
-            target_id = created["targetId"]
-            attached = await self.call(
-                "Target.attachToTarget",
-                {"targetId": target_id, "flatten": True},
-            )
-            session_id = attached["sessionId"]
-
-            await self.call("Page.enable", session_id=session_id)
-            await self.call("Network.enable", session_id=session_id)
-
-            nav = await self.call(
-                "Page.navigate",
-                {"url": url},
+            await self.wait_for_event(
+                "Page.loadEventFired",
                 session_id=session_id,
                 timeout=timeout,
             )
-            if nav.get("errorText"):
-                raise RuntimeError(f"navigation failed: {nav['errorText']}")
+        except TimeoutError:
+            pass
 
-            try:
-                await self.wait_for_event(
-                    "Page.loadEventFired",
-                    session_id=session_id,
-                    timeout=timeout,
-                )
-            except TimeoutError:
-                pass
+        await self._focus_target(target_id, session_id)
+        _, timed_out_on_challenge = await self._wait_for_page_clearance(
+            target_id,
+            session_id,
+            timeout,
+        )
+        loop = asyncio.get_event_loop()
+        max_deadline = loop.time() + timeout
+        if not timed_out_on_challenge:
+            await self._wait_minimum(session_id, min_wait, max_deadline)
 
-            deadline = asyncio.get_event_loop().time() + timeout
-            while asyncio.get_event_loop().time() < deadline:
-                title = await self.evaluate("document.title || ''", session_id) or ""
-                href = await self.evaluate("location.href || ''", session_id) or ""
-                ready = await self.evaluate("document.readyState", session_id) or ""
-                blob = f"{title}\n{href}".lower()
-                on_cf = any(marker in blob for marker in CF_MARKERS)
-                if ready == "complete" and not on_cf:
-                    break
-                await asyncio.sleep(0.5)
-
-            await self._wait_minimum(session_id, min_wait, deadline)
-
-            cookies_result = await self.call(
-                "Network.getCookies",
-                {"urls": [url]},
-                session_id=session_id,
-            )
-            return list(cookies_result.get("cookies") or [])
-        finally:
-            if target_id:
-                try:
-                    await self.call("Target.closeTarget", {"targetId": target_id})
-                except Exception:
-                    pass
+        final_url = await self.evaluate("location.href || ''", session_id) or url
+        cookies_result = await self.call(
+            "Network.getCookies",
+            {"urls": [url, final_url]},
+            session_id=session_id,
+        )
+        return list(cookies_result.get("cookies") or [])
 
     async def _fetch_response_body(
         self,
@@ -480,198 +726,148 @@ class CdpBrowser:
         min_wait: float = 0.0,
     ) -> dict[str, Any]:
         """Load ``url`` and return status, headers, body, final URL, and cookies."""
-        target_id: str | None = None
-        session_id: str | None = None
-        try:
-            created = await self.call("Target.createTarget", {"url": "about:blank"})
-            target_id = created["targetId"]
-            attached = await self.call(
-                "Target.attachToTarget",
-                {"targetId": target_id, "flatten": True},
-            )
-            session_id = attached["sessionId"]
+        target_id, session_id = await self._ensure_work_tab()
+        await self._focus_target(target_id, session_id)
 
-            await self.call("Page.enable", session_id=session_id)
-            await self.call("Network.enable", session_id=session_id)
+        document_responses: list[dict[str, Any]] = []
 
-            document_responses: list[dict[str, Any]] = []
-
-            async def collect_document_responses() -> None:
-                deadline = asyncio.get_event_loop().time() + timeout + min_wait + 5.0
-                while asyncio.get_event_loop().time() < deadline:
-                    remaining = deadline - asyncio.get_event_loop().time()
-                    try:
-                        params = await self.wait_for_event(
-                            "Network.responseReceived",
-                            session_id=session_id,
-                            timeout=min(remaining, 5.0),
-                        )
-                    except TimeoutError:
-                        if asyncio.get_event_loop().time() >= deadline:
-                            return
-                        continue
-
-                    if params.get("type") != "Document":
-                        continue
-
-                    response = params.get("response") or {}
-                    document_responses.append(
-                        {
-                            "status": response.get("status", 200),
-                            "headers": dict(response.get("headers") or {}),
-                            "url": str(response.get("url") or ""),
-                            "requestId": params.get("requestId"),
-                        }
+        async def collect_document_responses() -> None:
+            deadline = asyncio.get_event_loop().time() + (2 * timeout) + min_wait + 5.0
+            while asyncio.get_event_loop().time() < deadline:
+                remaining = deadline - asyncio.get_event_loop().time()
+                try:
+                    params = await self.wait_for_event(
+                        "Network.responseReceived",
+                        session_id=session_id,
+                        timeout=min(remaining, 5.0),
                     )
+                except TimeoutError:
+                    if asyncio.get_event_loop().time() >= deadline:
+                        return
+                    continue
 
-            collector = asyncio.create_task(collect_document_responses())
+                if params.get("type") != "Document":
+                    continue
+
+                response = params.get("response") or {}
+                document_responses.append(
+                    {
+                        "status": response.get("status", 200),
+                        "headers": dict(response.get("headers") or {}),
+                        "url": str(response.get("url") or ""),
+                        "requestId": params.get("requestId"),
+                    }
+                )
+
+        collector = asyncio.create_task(collect_document_responses())
+        try:
+            nav = await self.call(
+                "Page.navigate",
+                {"url": url},
+                session_id=session_id,
+                timeout=timeout,
+            )
+            if nav.get("errorText"):
+                raise RuntimeError(f"navigation failed: {nav['errorText']}")
+
             try:
-                nav = await self.call(
-                    "Page.navigate",
-                    {"url": url},
+                await self.wait_for_event(
+                    "Page.loadEventFired",
                     session_id=session_id,
                     timeout=timeout,
                 )
-                if nav.get("errorText"):
-                    raise RuntimeError(f"navigation failed: {nav['errorText']}")
+            except TimeoutError:
+                pass
 
-                try:
-                    await self.wait_for_event(
-                        "Page.loadEventFired",
-                        session_id=session_id,
-                        timeout=timeout,
-                    )
-                except TimeoutError:
-                    pass
+            await self._focus_target(target_id, session_id)
+            snapshot, timed_out_on_challenge = await self._wait_for_page_clearance(
+                target_id,
+                session_id,
+                timeout,
+            )
+            loop = asyncio.get_event_loop()
+            max_deadline = loop.time() + timeout
+            if not timed_out_on_challenge:
+                await self._wait_minimum(session_id, min_wait, max_deadline)
 
-                deadline = asyncio.get_event_loop().time() + timeout
-                last_href = ""
-                timed_out_on_challenge = False
-                while asyncio.get_event_loop().time() < deadline:
-                    snapshot = await self.evaluate(_PAGE_SNAPSHOT_JS, session_id) or {}
-                    title = str(snapshot.get("title") or "")
-                    href = str(snapshot.get("href") or "")
-                    ready = str(snapshot.get("ready") or "")
-                    html = str(snapshot.get("html") or "")
+            title = str(snapshot.get("title") or "")
+            final_url = str(snapshot.get("href") or "") or url
+            html = str(snapshot.get("html") or "")
 
-                    if href and href != last_href:
-                        if last_href:
-                            try:
-                                remaining = deadline - asyncio.get_event_loop().time()
-                                if remaining > 0:
-                                    await self.wait_for_event(
-                                        "Page.loadEventFired",
-                                        session_id=session_id,
-                                        timeout=remaining,
-                                    )
-                            except TimeoutError:
-                                pass
-                            snapshot = await self.evaluate(_PAGE_SNAPSHOT_JS, session_id) or {}
-                            title = str(snapshot.get("title") or "")
-                            href = str(snapshot.get("href") or "")
-                            ready = str(snapshot.get("ready") or "")
-                            html = str(snapshot.get("html") or "")
-                        last_href = href
-
-                    on_challenge = is_challenge_page(title, href, html)
-                    if ready == "complete" and not on_challenge:
+            doc: dict[str, Any] = {}
+            if document_responses:
+                for candidate in reversed(document_responses):
+                    if candidate["url"].rstrip("/") == final_url.rstrip("/"):
+                        doc = candidate
                         break
-                    await asyncio.sleep(0.5)
-                else:
-                    snapshot = await self.evaluate(_PAGE_SNAPSHOT_JS, session_id) or {}
-                    title = str(snapshot.get("title") or "")
-                    href = str(snapshot.get("href") or "")
-                    html = str(snapshot.get("html") or "")
-                    timed_out_on_challenge = is_challenge_page(title, href, html)
+                if not doc:
+                    doc = document_responses[-1]
 
-                if not timed_out_on_challenge:
-                    await self._wait_minimum(session_id, min_wait, deadline)
+            status_code = int(doc.get("status") or 200)
+            headers = dict(doc.get("headers") or {})
+            network_content = await self._fetch_response_body(
+                doc.get("requestId"), session_id
+            )
+            network_len = len(network_content)
+            outer_html = html
+            outer_len = len(outer_html.encode("utf-8"))
+            bodies_differ = bool(
+                network_content
+                and outer_html
+                and network_content != outer_html.encode("utf-8")
+            )
 
-                snapshot = await self.evaluate(_PAGE_SNAPSHOT_JS, session_id) or {}
-                title = str(snapshot.get("title") or "")
-                final_url = str(snapshot.get("href") or "") or url
-                html = str(snapshot.get("html") or "")
+            if (
+                network_content
+                and is_interstitial_body(network_content)
+                and outer_html
+                and bodies_differ
+            ):
+                content = outer_html.encode("utf-8")
+            elif not network_content and outer_html:
+                content = outer_html.encode("utf-8")
+            else:
+                content = network_content
 
-                doc: dict[str, Any] = {}
-                if document_responses:
-                    for candidate in reversed(document_responses):
-                        if candidate["url"].rstrip("/") == final_url.rstrip("/"):
-                            doc = candidate
-                            break
-                    if not doc:
-                        doc = document_responses[-1]
-
-                status_code = int(doc.get("status") or 200)
-                headers = dict(doc.get("headers") or {})
-                network_content = await self._fetch_response_body(
-                    doc.get("requestId"), session_id
-                )
-                network_len = len(network_content)
-                outer_html = html
-                outer_len = len(outer_html.encode("utf-8"))
-                bodies_differ = bool(
-                    network_content
-                    and outer_html
-                    and network_content != outer_html.encode("utf-8")
-                )
-
-                if (
-                    network_content
-                    and is_interstitial_body(network_content)
-                    and outer_html
-                    and bodies_differ
-                ):
-                    content = outer_html.encode("utf-8")
-                elif not network_content and outer_html:
-                    content = outer_html.encode("utf-8")
-                else:
-                    content = network_content
-
-                still_challenge = is_challenge_page(
-                    title, final_url, outer_html, body_len=len(content)
-                )
-                if timed_out_on_challenge or still_challenge:
-                    sys.stderr.write(
-                        "[cdp_browser] fetch_page: challenge still present at return "
-                        f"(timed_out={timed_out_on_challenge})\n"
-                    )
-
+            still_challenge = is_challenge_page(
+                title, final_url, outer_html, body_len=len(content)
+            )
+            if timed_out_on_challenge or still_challenge:
                 sys.stderr.write(
-                    "[cdp_browser] fetch_page return: "
-                    f"href={final_url!r} title={title!r} "
-                    f"network_len={network_len} outer_len={outer_len} "
-                    f"bodies_differ={bodies_differ} "
-                    f"challenge={still_challenge}\n"
+                    "[cdp_browser] fetch_page: challenge still present at return "
+                    f"(timed_out={timed_out_on_challenge})\n"
                 )
 
-                cookies_result = await self.call(
-                    "Network.getCookies",
-                    {"urls": [url, final_url]},
-                    session_id=session_id,
-                )
-                cookies = list(cookies_result.get("cookies") or [])
+            sys.stderr.write(
+                "[cdp_browser] fetch_page return: "
+                f"href={final_url!r} title={title!r} "
+                f"network_len={network_len} outer_len={outer_len} "
+                f"bodies_differ={bodies_differ} "
+                f"challenge={still_challenge}\n"
+            )
 
-                return {
-                    "url": url,
-                    "final_url": final_url,
-                    "status_code": status_code,
-                    "headers": headers,
-                    "content": content,
-                    "cookies": cookies,
-                    "redirects": document_responses[:-1] if len(document_responses) > 1 else [],
-                }
-            finally:
-                collector.cancel()
-                try:
-                    await collector
-                except asyncio.CancelledError:
-                    pass
+            cookies_result = await self.call(
+                "Network.getCookies",
+                {"urls": [url, final_url]},
+                session_id=session_id,
+            )
+            cookies = list(cookies_result.get("cookies") or [])
+
+            return {
+                "url": url,
+                "final_url": final_url,
+                "status_code": status_code,
+                "headers": headers,
+                "content": content,
+                "cookies": cookies,
+                "redirects": document_responses[:-1] if len(document_responses) > 1 else [],
+            }
         finally:
-            if target_id:
-                try:
-                    await self.call("Target.closeTarget", {"targetId": target_id})
-                except Exception:
-                    pass
+            collector.cancel()
+            try:
+                await collector
+            except asyncio.CancelledError:
+                pass
 
 
 def default_browser_headers_probe_url() -> str:
