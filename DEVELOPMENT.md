@@ -73,7 +73,11 @@ Single-site harvesting avoids full page reloads per solve. The override harveste
 
 ### Throughput
 
-Multiple browser windows (`BROWSER_COUNT`) multiply throughput. Each window can register as an independent solver. Cookie API requests are serialized per browser connection (one CDP session at a time).
+`BROWSER_COUNT` is the cookie API's parallelism knob: that many headed Chrome processes run at once, each with its own profile and `--remote-debugging-port` (`CDP_PORT`, `CDP_PORT+1`, …). The cookie server checks a CDP connection out of that pool for one `/v1/get` or `/v1/cookies` call at a time. There is no global navigation lock. When every live slot is busy, the extra call waits up to `QUEUE_TIMEOUT` seconds (default 10) and then returns HTTP 503 with a JSON `error` and a `Retry-After` header. The page `timeout` clock starts after a slot is acquired, so queue wait stays inside the caller's 20 second slack.
+
+Each Chrome needs on the order of 1–2 GB of `/dev/shm`. Compose defaults `shm_size` to `2gb` for `BROWSER_COUNT=1`. Raise `shm_size` with the count (`BROWSER_COUNT=4` → about `8gb`). Leave the default count at 1 so a small box does not OOM. The existing `--disable-dev-shm-usage` fallback still applies when `/dev/shm` is under ~500 MB.
+
+Token harvesting can still use multiple windows as independent solvers. Parallel cookie-API challenges are clicked with CDP `Input.dispatchMouseEvent` on the tab that owns the request so two windows do not steal OS focus from each other.
 
 ---
 
@@ -163,13 +167,27 @@ In Docker, the entrypoint rewrites extension paths to a loopback file server and
 Python service started by the Docker entrypoint.
 
 - Listens on `0.0.0.0:8081` (configurable via `COOKIE_SERVER_PORT`)
-- Connects to Chrome over CDP (`CDP_URL`, default `http://127.0.0.1:9222`)
-- Per request: `Target.createTarget` → navigate → wait for load → optional `min_wait` → `Network.getCookies` → `Target.closeTarget`
-- Serializes requests with a lock (one navigation at a time)
+- Connects to a pool of Chrome processes over CDP. `--cdp` / `CDP_URL` is the endpoint for index 0 (`http://127.0.0.1:9222`); later indexes use `CDP_PORT + i`
+- Pool size is the number of Chromes that actually came up, logged at startup. A dead Chrome fails only the request that held it; the entrypoint relaunches that process and later requests reconnect
+- Per request: check out one slot → navigate that Chrome's tab → wait for load / challenge → optional `min_wait` → `Network.getCookies` → release the slot
+- Cloudflare Turnstile interstitials are clicked with CDP `Input.dispatchMouseEvent`. Visible Prosopo Procaptcha widgets (frictionless PoW and dedicated PoW checkbox) are clicked the same way and the tab is held until a `procaptcha-response` token appears. If frictionless escalates to a puzzle or image dialog, that is detected and the wait ends unsolved.
+- Parallel slots never share a cookie jar (separate `--user-data-dir`). A fifth caller waits up to `QUEUE_TIMEOUT` then gets HTTP 503; it does not block on another caller's page timeout
 
-Source: `cookie_server/server.py`, `cookie_server/cdp_browser.py`.
+Callers use this by POSTing the usual `{"url", "timeout", "min_wait"}` JSON from several workers at once to the same `http://turnstile:8081/v1/get` (or `/v1/cookies`). The server assigns a Chrome per in-flight POST. Set `BROWSER_COUNT` to that worker count and raise compose `shm_size` (~2 GB × count). See README [Concurrent workers](README.md#concurrent-workers) for the `.env` / compose snippet, the client HTTP timeout `(2 * timeout) + min_wait + 20`, and a threaded example.
+
+Source: `cookie_server/server.py`, `cookie_server/cdp_browser.py`, `cookie_server/pool.py`.
 
 Python client: `solver/client.py`.
+
+Cookie API tests (fake browsers, no display, no Cloudflare):
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+`tests/test_unfocused_cdp_click.py` additionally launches headed Chrome on Xvfb when `google-chrome-stable` and `Xvfb` are installed, and checks that `Input.dispatchMouseEvent` on one slot's session clicks that slot's widget while another window has OS focus.
+
+`tests/test_procaptcha.py` covers the Procaptcha wait loop with a fake CDP session. `tests/test_procaptcha_cdp_click.py` launches headed Chrome and confirms a trusted CDP click fills `procaptcha-response` on a widget that ignores scripted clicks. Live demo solves (`tests/test_procaptcha_live.py`) run only when `PROSOPO_LIVE=1`.
 
 ---
 
@@ -183,9 +201,9 @@ Python client: `solver/client.py`.
 | File server | `9377` (loopback) | Extension config + harvester HTML |
 | `token_server` | `8080` | Turnstile token WebSocket |
 | `turnstile-clicker` | — | OS-level checkbox clicks |
-| Chrome × `BROWSER_COUNT` | `9222` (loopback CDP) | Headed browser on `about:blank` |
-| `cdp_proxy` | `9223` → `9222` | Publishes CDP on host `127.0.0.1:9222` |
-| `cookie_server` | `8081` | Cookie HTTP API |
+| Chrome × `BROWSER_COUNT` | `CDP_PORT + i` (loopback, default 9222, 9223, …) | Headed browser on `about:blank`; one process per concurrent cookie-API navigation |
+| `cdp_proxy` | `CDP_PROXY_PORT` → `CDP_PORT` | Publishes Chrome 0 on host `127.0.0.1:9222`. Default proxy port is `9222 + BROWSER_COUNT` (9223 when the count is 1) |
+| `cookie_server` | `8081` | Cookie HTTP API; pools the Chromes above |
 
 ### Configure
 
@@ -210,6 +228,8 @@ Optional proxies: `config/proxies.txt` (one per line), set `USE_PROXY_SOLVING: t
 docker compose up --build
 ```
 
+To serve four scraper workers at once, set `BROWSER_COUNT=4` in `.env` and `shm_size: "8gb"` in `docker-compose.yml`, then compose up. Workers POST concurrently at `http://127.0.0.1:8081` with the same JSON as a single call. Details: README [Concurrent workers](README.md#concurrent-workers).
+
 ### Environment variables
 
 | Variable | Default | Purpose |
@@ -218,7 +238,8 @@ docker compose up --build
 | `TOKEN_SERVER_PORT` | `8080` | Token server host port |
 | `PAGE_OVERRIDE` | `0` | `1` = harvester replaces navigations |
 | `CLICKER_ENABLED` | `1` | Auto-start clicker |
-| `BROWSER_COUNT` | `1` | Chrome window count |
+| `BROWSER_COUNT` | `1` | Parallel Chrome processes (cookie API concurrency). Each extra browser needs 1–2 GB of `/dev/shm` |
+| `QUEUE_TIMEOUT` | `10` | Seconds to wait for a free Chrome slot before HTTP 503 |
 | `SCREEN_WIDTH` / `SCREEN_HEIGHT` | `1920` / `1080` | Xvfb size |
 | `ENABLE_VNC` | `0` | VNC on port `5900` |
 | `CHROME_NO_SANDBOX` | `1` | `--no-sandbox` for Docker |
@@ -371,8 +392,9 @@ if (packet.byteLength > 5) {
 ## Project layout
 
 ```
-cookie_server/          # HTTP cookie API + CDP automation
+cookie_server/          # HTTP cookie API + CDP automation + browser pool
 solver/                 # Python client package (pip install -e solver)
+tests/                  # Cookie API pool tests (fake browsers) + unfocused CDP click
 cf-turnstile-bypass/
   token-server/         # Rust WebSocket router
   turnstile-clicker/    # Rust OS clicker

@@ -21,9 +21,11 @@ Changes made in this fork relative to the original project:
 | **On-demand loading** | Removed hardcoded `TARGET_URL`. Chrome starts on `about:blank`; URLs are passed per request. |
 | **`min_wait`** | Optional minimum wait after page load so redirect chains and late cookie writes are captured. |
 | **Docker** | Cookie server started in `entrypoint.sh`; port `8081` exposed in compose. |
+| **Concurrent cookie API** | `BROWSER_COUNT` is a pool of headed Chrome processes (own profile + `CDP_PORT + i` debugging port). Overlapping `/v1/get` and `/v1/cookies` calls run in parallel. A full pool returns HTTP 503 after `QUEUE_TIMEOUT`. |
 | **Examples** | Added `examples/test_cookies.py` and `examples/fetch_with_cookies.py`. |
 | **Removed** | Windows-only `z-index-orderer` (not used in the Linux/Docker path). |
 | **Docs split** | README simplified for usage; detailed upstream docs moved to `DEVELOPMENT.md`. |
+| **Prosopo** | Cookie API clicks visible Procaptcha checkboxes (frictionless PoW and dedicated PoW) via CDP and waits for a `procaptcha-response` token. If frictionless escalates to puzzle or image, that challenge is detected and left unsolved. |
 
 Token harvesting (`PAGE_OVERRIDE=1`, token server, harvester, clicker) is still available. See [DEVELOPMENT.md](DEVELOPMENT.md#token-harvesting).
 
@@ -232,6 +234,83 @@ Response:
 
 Decode `content_b64` for the page body. The Python client's `browser.get()` wraps this endpoint and returns a `BrowserResponse`.
 
+When every Chrome slot is busy, both endpoints wait up to `QUEUE_TIMEOUT` seconds (default 10) and then return HTTP 503 with `{"error": "..."}` and a `Retry-After` header. The navigation `timeout` starts after a slot is acquired, so time spent in that queue does not eat the page budget.
+
+### Concurrent workers
+
+Several scraper workers can share one solver container. They all POST to the same `http://127.0.0.1:8081/v1/get` (or `/v1/cookies`) with the same JSON shape as a single call. The server assigns a free Chrome for the duration of each POST.
+
+**1. Turn the pool up.** `BROWSER_COUNT` is how many navigations run at the same time. Each Chrome needs about 1–2 GB of `/dev/shm`, so raise compose `shm_size` to match.
+
+```bash
+# .env
+BROWSER_COUNT=4
+QUEUE_TIMEOUT=10
+```
+
+```yaml
+# docker-compose.yml
+shm_size: "8gb"   # ~2 GB × BROWSER_COUNT
+```
+
+```bash
+docker compose up --build
+```
+
+`BROWSER_COUNT=4` means four `/v1/get` or `/v1/cookies` calls are in Chrome at once. A fifth waits up to `QUEUE_TIMEOUT` seconds, then the server returns HTTP 503:
+
+```json
+{"error": "all browser slots are busy"}
+```
+
+with a `Retry-After` header. Retry that one call. The four that already hold a Chrome keep running.
+
+**2. Fire overlapping POSTs.** Keep the body as `url`, `timeout`, and `min_wait`. Give your HTTP client this many seconds before it closes the socket:
+
+```text
+(2 * timeout) + min_wait + 20
+```
+
+Queue wait is meant to fit in that 20 second slack. The page `timeout` clock starts after a Chrome slot is acquired.
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+import json
+import urllib.error
+import urllib.request
+
+API = "http://127.0.0.1:8081/v1/get"
+TIMEOUT = 90
+MIN_WAIT = 8
+HTTP_DEADLINE = (2 * TIMEOUT) + MIN_WAIT + 20
+URLS = [
+    "https://example.com/a",
+    "https://example.com/b",
+    "https://example.com/c",
+    "https://example.com/d",
+]
+
+def load(url: str) -> dict:
+    body = json.dumps({"url": url, "timeout": TIMEOUT, "min_wait": MIN_WAIT}).encode()
+    req = urllib.request.Request(
+        API, data=body, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_DEADLINE) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        if exc.code == 503:
+            raise RuntimeError("pool busy, retry this URL") from exc
+        raise
+
+with ThreadPoolExecutor(max_workers=4) as pool:
+    pages = list(pool.map(load, URLS))
+```
+
+Same-host URLs are fine: each in-flight call has its own Chrome profile, so cookies and HTML stay on the worker that produced them.
+
+The Python `solver` client wraps the same endpoints (`browser.get` / `browser.fetch_cookies`). Use one `solver.setup(...)` and call it from several threads the same way. On 503 it raises `RuntimeError` with `cookie server error (503): ...`.
+
 ---
 
 ## Configuration
@@ -242,7 +321,8 @@ Decode `content_b64` for the page body. The Python client's `browser.get()` wrap
 | `BROWSER_HEADERS_FILE` | `/data/browser_headers.json` | Path inside the container where startup-captured browser headers are stored. |
 | `TOKEN_SERVER_PORT` | `8080` | Host port for the token WebSocket (harvesting mode). |
 | `PAGE_OVERRIDE` | `0` | `1` enables token-harvester page replacement. |
-| `BROWSER_COUNT` | `1` | Number of Chrome windows. |
+| `BROWSER_COUNT` | `1` | Parallel Chrome processes for the cookie API. Each process is one concurrent `/v1/get` or `/v1/cookies` navigation, with its own profile and debugging port (`CDP_PORT`, `CDP_PORT+1`, …). Raise compose `shm_size` by 1–2 GB per extra browser. Default stays 1 so a small machine does not OOM. |
+| `QUEUE_TIMEOUT` | `10` | Seconds to wait for a free browser slot before HTTP 503 + `Retry-After`. The page `timeout` clock starts after a slot is acquired. |
 | `ENABLE_VNC` | `0` | Set `1` to watch the virtual display on port `5900`. |
 
 See `.env.example` and [DEVELOPMENT.md](DEVELOPMENT.md#docker) for the full list.

@@ -6,13 +6,19 @@ services:
     init: true
     restart: unless-stopped
     # Chrome needs a large /dev/shm or it will crash renderer processes.
+    # Budget about 1–2 GB per Chrome. This 2gb default matches BROWSER_COUNT=1.
+    # For BROWSER_COUNT=4 set shm_size to "8gb" (or at least 4–8gb). Leave
+    # BROWSER_COUNT at 1 on a small machine so the container does not OOM.
     shm_size: "2gb"
     ports:
       - "${TOKEN_SERVER_PORT:-8080}:8080"
       - "${COOKIE_SERVER_PORT:-8081}:8081"
       # Set ENABLE_VNC=1 to peek at the virtual display.
       - "${VNC_PORT:-5900}:5900"
-      - "127.0.0.1:9222:9223"
+      # Host 9222 -> CDP proxy for Chrome 0. The proxy listens on
+      # CDP_PROXY_PORT (9223 when BROWSER_COUNT=1). For BROWSER_COUNT=N
+      # set CDP_PROXY_PORT to 9222+N so it does not collide with Chrome 1..N-1.
+      - "127.0.0.1:9222:${CDP_PROXY_PORT:-9223}"
     environment:
       COOKIE_SERVER_PORT: "${COOKIE_SERVER_PORT:-8081}"
       SCREEN_WIDTH: "${SCREEN_WIDTH:-1920}"
@@ -21,6 +27,8 @@ services:
       ENABLE_VNC: "${ENABLE_VNC:-0}"
       VNC_PORT: "5900"
       BROWSER_COUNT: "${BROWSER_COUNT:-1}"
+      QUEUE_TIMEOUT: "${QUEUE_TIMEOUT:-10}"
+      CDP_PROXY_PORT: "${CDP_PROXY_PORT:-9223}"
       CHROME_NO_SANDBOX: "${CHROME_NO_SANDBOX:-1}"
       PAGE_OVERRIDE: "${PAGE_OVERRIDE:-0}"
       CHROME_REMOTE_DEBUGGING: "${CHROME_REMOTE_DEBUGGING:-1}"

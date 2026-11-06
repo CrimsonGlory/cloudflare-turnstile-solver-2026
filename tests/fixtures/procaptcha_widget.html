@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>procaptcha-click-fixture</title>
+</head>
+<body style="margin:0;background:#fff">
+  <form id="signup" action="/signup" method="POST">
+    <div
+      class="procaptcha"
+      data-sitekey="test-site-key"
+      style="position:absolute;left:40px;top:40px;width:300px;height:80px"
+    >
+      <prosopo-procaptcha>
+        <div class="prosopo-widget">
+          <div
+            class="prosopo-widget__content"
+            style="width:300px;height:74px;display:flex;align-items:center;border:1px solid #ccc"
+          >
+            <div
+              class="prosopo-checkbox"
+              id="cbhost"
+              style="width:58px;height:58px"
+            ></div>
+            <span>I am human</span>
+          </div>
+        </div>
+      </prosopo-procaptcha>
+    </div>
+  </form>
+  <script>
+    window.__trusted = false;
+    window.__untrusted = false;
+    if (!customElements.get("prosopo-procaptcha")) {
+      customElements.define("prosopo-procaptcha", class extends HTMLElement {});
+    }
+    const host = document.getElementById("cbhost");
+    const shadow = host.attachShadow({ mode: "open" });
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.style.cssText = "width:28px;height:28px;margin:15px;display:block";
+    shadow.appendChild(input);
+    input.addEventListener("click", (ev) => {
+      if (!ev.isTrusted) {
+        window.__untrusted = true;
+        return;
+      }
+      ev.preventDefault();
+      input.checked = true;
+      window.__trusted = true;
+      let hidden = document.querySelector('[name="procaptcha-response"]');
+      if (!hidden) {
+        hidden = document.createElement("input");
+        hidden.type = "hidden";
+        hidden.name = "procaptcha-response";
+        document.getElementById("signup").appendChild(hidden);
+      }
+      hidden.value = "procaptcha-test-token";
+    });
+  </script>
+</body>
+</html>

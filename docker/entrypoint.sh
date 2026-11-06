@@ -12,6 +12,7 @@ export CLICKER_ENABLED="${CLICKER_ENABLED:-1}"
 export ENABLE_VNC="${ENABLE_VNC:-0}"
 export VNC_PORT="${VNC_PORT:-5900}"
 export BROWSER_COUNT="${BROWSER_COUNT:-1}"
+export QUEUE_TIMEOUT="${QUEUE_TIMEOUT:-10}"
 export CHROME_NO_SANDBOX="${CHROME_NO_SANDBOX:-1}"
 export PAGE_OVERRIDE="${PAGE_OVERRIDE:-0}"
 export COOKIE_SERVER_PORT="${COOKIE_SERVER_PORT:-8081}"
@@ -184,16 +185,26 @@ echo "[entrypoint] Starting token server"
 "${APP_DIR}/bin/token_server" >/proc/1/fd/1 2>/proc/1/fd/2 &
 TOKEN_SERVER_PID=$!
 
-echo "[entrypoint] Starting turnstile clicker (CLICKER_ENABLED=${CLICKER_ENABLED})"
-"${APP_DIR}/bin/turnstile-clicker" >/proc/1/fd/1 2>/proc/1/fd/2 &
-CLICKER_PID=$!
+# The OS clicker screenshots one X display and clicks whichever checkbox
+# it finds. Parallel cookie-API windows overlap on :99, so that click can
+# land in the wrong Chrome. CDP Input.dispatchMouseEvent is scoped to the
+# tab that owns the request. Keep the clicker for a single browser (and
+# for token harvesting, which still tiles windows on this display).
+CLICKER_PID=""
+if [[ "${PAGE_OVERRIDE}" == "1" || "${BROWSER_COUNT}" -le 1 ]]; then
+    echo "[entrypoint] Starting turnstile clicker (CLICKER_ENABLED=${CLICKER_ENABLED})"
+    "${APP_DIR}/bin/turnstile-clicker" >/proc/1/fd/1 2>/proc/1/fd/2 &
+    CLICKER_PID=$!
+else
+    echo "[entrypoint] OS clicker disabled for BROWSER_COUNT=${BROWSER_COUNT}; cookie API clicks via CDP"
+fi
 
 sleep 1
 if ! kill -0 "${TOKEN_SERVER_PID}" 2>/dev/null; then
     echo "[entrypoint] token_server exited immediately" >&2
     exit 1
 fi
-if ! kill -0 "${CLICKER_PID}" 2>/dev/null; then
+if [[ -n "${CLICKER_PID}" ]] && ! kill -0 "${CLICKER_PID}" 2>/dev/null; then
     echo "[entrypoint] turnstile-clicker exited immediately" >&2
     exit 1
 fi
@@ -242,15 +253,8 @@ else
 fi
 chrome_base_flags+=(--disable-features="${chrome_features}")
 
-if [[ "${CHROME_REMOTE_DEBUGGING}" == "1" ]]; then
-    # Chrome only accepts DevTools on loopback. A small proxy publishes it
-    # on 0.0.0.0 so `python3 examples/test_site.py` works from the host.
-    chrome_base_flags+=(
-        --remote-debugging-port="${CDP_PORT}"
-        --remote-debugging-address=127.0.0.1
-        --remote-allow-origins=*
-    )
-fi
+# Per-Chrome --remote-debugging-port is added in launch_chrome. Sharing
+# CDP_PORT across BROWSER_COUNT processes leaves only the first one listening.
 
 # /usr/bin/google-chrome-stable is a wrapper that starts the real binary
 # and then exits. Supervising that wrapper PID looks like a crash loop:
@@ -284,6 +288,7 @@ launch_chrome() {
     local pos_x=$((index * 48))
     local pos_y=$((index * 48))
     local url="about:blank"
+    local cdp_port=$((CDP_PORT + index))
     mkdir -p "${profile}"
 
     # A previous SIGKILL leaves these behind; Chrome then exits at once.
@@ -297,13 +302,26 @@ launch_chrome() {
         --ozone-platform=x11
     )
 
+    if [[ "${CHROME_REMOTE_DEBUGGING}" == "1" ]]; then
+        # Chrome i listens on CDP_PORT + i (9222, 9223, …).
+        flags+=(
+            --remote-debugging-port="${cdp_port}"
+            --remote-debugging-address=127.0.0.1
+            --remote-allow-origins=*
+        )
+    fi
+
     if [[ "${BROWSER_COUNT}" -le 1 ]]; then
         flags+=(--start-maximized)
     else
         flags+=(--window-size="$((SCREEN_WIDTH - pos_x)),$((SCREEN_HEIGHT - pos_y))")
     fi
 
-    echo "[entrypoint] Launching Chrome #${index} -> ${url}"
+    if [[ "${CHROME_REMOTE_DEBUGGING}" == "1" ]]; then
+        echo "[entrypoint] Launching Chrome #${index} cdp=127.0.0.1:${cdp_port} -> ${url}"
+    else
+        echo "[entrypoint] Launching Chrome #${index} -> ${url}"
+    fi
     "${chrome_bin}" "${flags[@]}" "${url}" >/tmp/chrome-"${index}".log 2>&1 &
 
     local i
@@ -341,7 +359,15 @@ else
 fi
 
 if [[ "${CHROME_REMOTE_DEBUGGING}" == "1" ]]; then
-    export CDP_PROXY_PORT="${CDP_PROXY_PORT:-9223}"
+    # Publish Chrome 0 only. Bind past the per-index debugging ports so
+    # Chrome 1 (CDP_PORT+1) can listen. BROWSER_COUNT=1 -> 9223, same as before.
+    chrome_last=$((CDP_PORT + BROWSER_COUNT - 1))
+    proxy_port="${CDP_PROXY_PORT:-$((CDP_PORT + BROWSER_COUNT))}"
+    if [[ "${proxy_port}" -ge "${CDP_PORT}" && "${proxy_port}" -le "${chrome_last}" ]]; then
+        echo "[entrypoint] CDP_PROXY_PORT=${proxy_port} collides with Chrome ports ${CDP_PORT}-${chrome_last}; using $((chrome_last + 1))"
+        proxy_port=$((chrome_last + 1))
+    fi
+    export CDP_PROXY_PORT="${proxy_port}"
     python3 /app/examples/cdp_proxy.py >/tmp/cdp-proxy.log 2>&1 &
 
     BROWSER_HEADERS_FILE="${BROWSER_HEADERS_FILE:-${DATA_DIR}/browser_headers.json}"
@@ -380,9 +406,10 @@ echo "[entrypoint] Stack is up."
 echo "[entrypoint]   display      ${DISPLAY} (${SCREEN_WIDTH}x${SCREEN_HEIGHT})"
 echo "[entrypoint]   token server ws://0.0.0.0:8080"
 echo "[entrypoint]   cookie API   http://0.0.0.0:${COOKIE_SERVER_PORT}/v1/cookies"
-echo "[entrypoint]   browsers     ${BROWSER_COUNT}"
+echo "[entrypoint]   browsers     ${BROWSER_COUNT} (cdp ${CDP_PORT}..$((CDP_PORT + BROWSER_COUNT - 1)))"
+echo "[entrypoint]   queue wait   ${QUEUE_TIMEOUT}s"
 echo "[entrypoint]   override     ${PAGE_OVERRIDE}"
-echo "[entrypoint]   cdp          $([[ "${CHROME_REMOTE_DEBUGGING}" == "1" ]] && echo "0.0.0.0:${CDP_PORT}" || echo "disabled")"
+echo "[entrypoint]   cdp          $([[ "${CHROME_REMOTE_DEBUGGING}" == "1" ]] && echo "0.0.0.0:${CDP_PROXY_PORT:-$((CDP_PORT + BROWSER_COUNT))} -> 127.0.0.1:${CDP_PORT}" || echo "disabled")"
 echo "[entrypoint]   vnc          $([[ "${ENABLE_VNC}" == "1" ]] && echo "port ${VNC_PORT}" || echo "disabled")"
 
 # Keep the container alive while the core processes run. Restart Chrome if
@@ -392,7 +419,7 @@ while true; do
         echo "[entrypoint] token_server exited" >&2
         exit 1
     fi
-    if ! kill -0 "${CLICKER_PID}" 2>/dev/null; then
+    if [[ -n "${CLICKER_PID}" ]] && ! kill -0 "${CLICKER_PID}" 2>/dev/null; then
         echo "[entrypoint] turnstile-clicker exited" >&2
         exit 1
     fi

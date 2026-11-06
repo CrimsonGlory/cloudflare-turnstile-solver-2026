@@ -31,12 +31,165 @@ CF_DOM_MARKERS = (
 CF_INTERSTITIAL_BODY_LEN = 5371
 CF_POST_CLICK_BODY_LEN = 5985
 
-_PAGE_SNAPSHOT_JS = """(() => ({
-  ready: document.readyState || '',
-  title: document.title || '',
-  href: location.href || '',
-  html: document.documentElement ? document.documentElement.outerHTML : '',
-}))()"""
+# Procaptcha (frictionless / PoW) inspects light DOM and open shadow roots.
+# Puzzle and image challenges open a role=dialog surface; those are reported
+# as kind=visual and left unsolved.
+_PROSOPO_INSPECT_JS = """
+function inspectProcaptcha() {
+  try {
+    var tokenEl = document.querySelector('[name="procaptcha-response"]');
+    var token = tokenEl && tokenEl.value ? String(tokenEl.value).trim() : '';
+    var widget = document.querySelector(
+      '.procaptcha, .p-procaptcha, .prosopo-widget, .prosopo-checkbox, prosopo-procaptcha'
+    );
+    if (!widget && !token) {
+      return { present: false, solved: false };
+    }
+    if (token) {
+      return { present: true, solved: true, kind: 'solved', token: token };
+    }
+
+    var dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+    for (var d = 0; d < dialogs.length; d++) {
+      var dr = dialogs[d].getBoundingClientRect();
+      if (dr.width >= 80 && dr.height >= 80) {
+        return { present: true, solved: false, kind: 'visual' };
+      }
+    }
+
+    function clickPoint(el, xRatio) {
+      try {
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+      } catch (e) {}
+      var r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return null;
+      var ratio = xRatio == null ? 0.5 : xRatio;
+      return {
+        x: Math.round(r.left + Math.min(Math.max(8, r.width * ratio), r.width - 2)),
+        y: Math.round(r.top + r.height / 2),
+        width: Math.round(r.width),
+        height: Math.round(r.height)
+      };
+    }
+
+    function walkShadows(root, visit) {
+      if (!root) return null;
+      var hit = visit(root);
+      if (hit) return hit;
+      if (root.shadowRoot) {
+        var fromRoot = walkShadows(root.shadowRoot, visit);
+        if (fromRoot) return fromRoot;
+      }
+      var nodes = root.querySelectorAll('*');
+      for (var n = 0; n < nodes.length; n++) {
+        if (nodes[n].shadowRoot) {
+          var nested = walkShadows(nodes[n].shadowRoot, visit);
+          if (nested) return nested;
+        }
+      }
+      return null;
+    }
+
+    function findCheckbox(root) {
+      return walkShadows(root, function (scope) {
+        var inputs = scope.querySelectorAll('input[type="checkbox"]');
+        for (var i = 0; i < inputs.length; i++) {
+          var input = inputs[i];
+          if (input.disabled) continue;
+          var ir = input.getBoundingClientRect();
+          if (ir.width >= 8 && ir.height >= 8) return input;
+        }
+        return null;
+      });
+    }
+
+    function findSpinner(root) {
+      return walkShadows(root, function (scope) {
+        return scope.querySelector('[role="progressbar"], [role="status"]');
+      });
+    }
+
+    var checkbox = null;
+    var hosts = document.querySelectorAll('.prosopo-checkbox');
+    for (var h = 0; h < hosts.length; h++) {
+      checkbox = findCheckbox(hosts[h].shadowRoot || hosts[h]);
+      if (checkbox) break;
+    }
+    if (!checkbox) checkbox = findCheckbox(document);
+
+    if (checkbox) {
+      var boxClick = clickPoint(checkbox, 0.5);
+      if (!boxClick) {
+        return { present: true, solved: false, kind: 'pending', loading: true };
+      }
+      return {
+        present: true,
+        solved: false,
+        kind: 'checkbox',
+        click: boxClick
+      };
+    }
+
+    if (widget && findSpinner(widget)) {
+      return { present: true, solved: false, kind: 'pending', loading: true };
+    }
+
+    var invisible = document.querySelector(
+      '.procaptcha[data-size="invisible"], button.procaptcha'
+    );
+    if (invisible && window.procaptcha && typeof window.procaptcha.execute === 'function') {
+      return { present: true, solved: false, kind: 'invisible' };
+    }
+
+    var clickHost = document.querySelector(
+      '.prosopo-checkbox, .prosopo-widget__content, .prosopo-widget, .procaptcha, .p-procaptcha'
+    );
+    if (clickHost) {
+      var hostClick = clickPoint(clickHost, 0.12);
+      if (hostClick) {
+        return {
+          present: true,
+          solved: false,
+          kind: 'checkbox',
+          click: hostClick
+        };
+      }
+    }
+
+    return { present: true, solved: false, kind: 'pending' };
+  } catch (err) {
+    return { present: false, solved: false, error: String(err) };
+  }
+}
+"""
+
+_PAGE_SNAPSHOT_JS = (
+    "(() => {\n"
+    + _PROSOPO_INSPECT_JS
+    + """
+  return {
+    ready: document.readyState || '',
+    title: document.title || '',
+    href: location.href || '',
+    html: document.documentElement ? document.documentElement.outerHTML : '',
+    procaptcha: inspectProcaptcha()
+  };
+})()"""
+)
+
+_PROSOPO_EXECUTE_JS = """(() => {
+  try {
+    if (window.procaptcha && typeof window.procaptcha.execute === 'function') {
+      window.procaptcha.execute();
+      return { executed: true, via: 'api' };
+    }
+  } catch (e) {}
+  document.dispatchEvent(new CustomEvent('procaptcha:execute', {
+    bubbles: true,
+    cancelable: true
+  }));
+  return { executed: true, via: 'event' };
+})()"""
 
 _TURNSTILE_IFRAME_JS = """(() => {
   const selectors = [
@@ -135,6 +288,22 @@ def is_interstitial_body(content: bytes) -> bool:
     text = content.decode("utf-8", errors="replace")
     return any(marker in text.lower() for marker in CF_DOM_MARKERS + CF_MARKERS)
 
+
+def procaptcha_state(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    state = (snapshot or {}).get("procaptcha")
+    return state if isinstance(state, dict) else {}
+
+
+def pending_procaptcha(snapshot: dict[str, Any] | None) -> bool:
+    state = procaptcha_state(snapshot)
+    return bool(state.get("present") and not state.get("solved"))
+
+
+def procaptcha_token(snapshot: dict[str, Any] | None) -> str:
+    state = procaptcha_state(snapshot)
+    token = state.get("token")
+    return str(token).strip() if token else ""
+
 BROWSER_HEADER_KEYS = (
     "User-Agent",
     "Accept-Language",
@@ -216,7 +385,7 @@ def discover_browser_ws(cdp_http: str) -> str:
 
 
 class CdpBrowser:
-    def __init__(self, reader, writer) -> None:
+    def __init__(self, reader, writer, *, focus_windows: bool = True) -> None:
         self.reader = reader
         self.writer = writer
         self._next_id = 0
@@ -226,12 +395,20 @@ class CdpBrowser:
         self._closed = False
         self._work_target_id: str | None = None
         self._work_session_id: str | None = None
+        # True only for a single-slot pool. Parallel slots must not steal
+        # OS focus from each other; Turnstile is clicked via CDP input.
+        self._focus_windows = focus_windows
 
     @classmethod
-    async def connect(cls, cdp_http: str) -> "CdpBrowser":
+    async def connect(
+        cls,
+        cdp_http: str,
+        *,
+        focus_windows: bool = True,
+    ) -> "CdpBrowser":
         ws_url = discover_browser_ws(cdp_http)
         reader, writer = await ws_connect(ws_url)
-        browser = cls(reader, writer)
+        browser = cls(reader, writer, focus_windows=focus_windows)
         browser._recv_task = asyncio.create_task(browser._recv_loop())
         return browser
 
@@ -239,6 +416,7 @@ class CdpBrowser:
         self._closed = True
         self._work_target_id = None
         self._work_session_id = None
+        self._fail_pending(ConnectionError("CDP connection closed"))
         if self._recv_task:
             self._recv_task.cancel()
             try:
@@ -246,6 +424,16 @@ class CdpBrowser:
             except asyncio.CancelledError:
                 pass
         await ws_close(self.writer)
+
+    def _fail_pending(self, exc: BaseException) -> None:
+        for fut in self._pending.values():
+            if not fut.done():
+                fut.set_exception(exc)
+        for _, _, fut in self._event_waiters:
+            if not fut.done():
+                fut.set_exception(exc)
+        self._pending.clear()
+        self._event_waiters.clear()
 
     def _dispatch_event(self, method: str, session_id: str | None, params: dict) -> None:
         remaining: list[tuple[str, str | None, asyncio.Future]] = []
@@ -275,15 +463,13 @@ class CdpBrowser:
                 method = data.get("method")
                 if method:
                     self._dispatch_event(method, data.get("sessionId"), data.get("params") or {})
-        except (asyncio.CancelledError, ConnectionError):
-            for fut in self._pending.values():
-                if not fut.done():
-                    fut.set_exception(ConnectionError("CDP connection closed"))
-            for _, _, fut in self._event_waiters:
-                if not fut.done():
-                    fut.set_exception(ConnectionError("CDP connection closed"))
-            self._pending.clear()
-            self._event_waiters.clear()
+        except asyncio.CancelledError:
+            self._fail_pending(ConnectionError("CDP connection closed"))
+            raise
+        except Exception:
+            self._fail_pending(ConnectionError("CDP connection closed"))
+        finally:
+            self._closed = True
 
     async def call(
         self,
@@ -428,7 +614,15 @@ class CdpBrowser:
         return inner.get("value")
 
     async def _focus_target(self, target_id: str, session_id: str) -> None:
-        """Bring the tab to the foreground so the OS clicker can see Turnstile."""
+        """Bring the tab to the foreground so the OS clicker can see Turnstile.
+
+        Skipped when more than one cookie-API job can run: two windows on one
+        X display steal focus, and the OS clicker then hits the wrong page.
+        Parallel solves click the widget with CDP ``Input.dispatchMouseEvent``
+        on this target session instead.
+        """
+        if not self._focus_windows:
+            return
         try:
             await self.call("Target.activateTarget", {"targetId": target_id})
         except Exception:
@@ -482,16 +676,7 @@ class CdpBrowser:
             return True
         return False
 
-    async def _click_turnstile(self, session_id: str) -> bool:
-        coords = await self.evaluate(_TURNSTILE_IFRAME_JS, session_id)
-        if not isinstance(coords, dict):
-            return False
-        try:
-            x = float(coords["x"])
-            y = float(coords["y"])
-        except (KeyError, TypeError, ValueError):
-            return False
-
+    async def _click_at(self, session_id: str, x: float, y: float) -> None:
         for event_type, pressed in (
             ("mouseMoved", None),
             ("mousePressed", True),
@@ -507,7 +692,31 @@ class CdpBrowser:
             if pressed is not None:
                 params["buttons"] = 1 if pressed else 0
             await self.call("Input.dispatchMouseEvent", params, session_id=session_id)
+
+    async def _click_coords(self, session_id: str, coords: Any) -> bool:
+        if not isinstance(coords, dict):
+            return False
+        try:
+            x = float(coords["x"])
+            y = float(coords["y"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        await self._click_at(session_id, x, y)
         return True
+
+    async def _click_turnstile(self, session_id: str) -> bool:
+        coords = await self.evaluate(_TURNSTILE_IFRAME_JS, session_id)
+        return await self._click_coords(session_id, coords)
+
+    async def _click_procaptcha(self, session_id: str, coords: Any = None) -> bool:
+        if coords is None:
+            snapshot = await self.evaluate(_PAGE_SNAPSHOT_JS, session_id) or {}
+            coords = procaptcha_state(snapshot).get("click")
+        return await self._click_coords(session_id, coords)
+
+    async def _execute_procaptcha(self, session_id: str) -> bool:
+        result = await self.evaluate(_PROSOPO_EXECUTE_JS, session_id)
+        return bool(isinstance(result, dict) and result.get("executed"))
 
     async def _wait_for_page_clearance(
         self,
@@ -521,15 +730,18 @@ class CdpBrowser:
         last_href = ""
         last_focus = 0.0
         last_cdp_click = 0.0
+        last_procaptcha_click = 0.0
         last_submit = 0.0
         last_reload = 0.0
         stuck_challenge_since: float | None = None
         reload_count = 0
         max_reloads = 3
+        procaptcha_executed = False
+        logged_visual = False
 
         while loop.time() < max_deadline:
             now = loop.time()
-            if now - last_focus >= 2.0:
+            if self._focus_windows and now - last_focus >= 2.0:
                 await self._focus_target(target_id, session_id)
                 last_focus = now
 
@@ -558,10 +770,13 @@ class CdpBrowser:
                     ready = str(snapshot.get("ready") or "")
                     html = str(snapshot.get("html") or "")
                     stuck_challenge_since = None
+                    procaptcha_executed = False
                 last_href = href
 
-            on_challenge = is_challenge_page(title, href, html)
-            if on_challenge:
+            on_cf = is_challenge_page(title, href, html)
+            on_prosopo = pending_procaptcha(snapshot)
+            on_challenge = on_cf or on_prosopo
+            if on_cf:
                 if stuck_challenge_since is None:
                     stuck_challenge_since = now
                 elif (
@@ -575,6 +790,7 @@ class CdpBrowser:
                     last_reload = now
                     stuck_challenge_since = None
                     last_href = ""
+                    procaptcha_executed = False
                     try:
                         await self.wait_for_event(
                             "Page.loadEventFired",
@@ -606,6 +822,31 @@ class CdpBrowser:
             else:
                 stuck_challenge_since = None
 
+            if on_prosopo:
+                state = procaptcha_state(snapshot)
+                kind = str(state.get("kind") or "")
+                if kind == "visual":
+                    if not logged_visual:
+                        sys.stderr.write(
+                            "[cdp_browser] procaptcha visual challenge present; "
+                            "puzzle/image is not solved yet\n"
+                        )
+                        logged_visual = True
+                    return snapshot, True
+                elif kind == "invisible":
+                    if not procaptcha_executed:
+                        if await self._execute_procaptcha(session_id):
+                            sys.stderr.write(
+                                "[cdp_browser] executed invisible procaptcha widget\n"
+                            )
+                        procaptcha_executed = True
+                elif state.get("click") and now - last_procaptcha_click >= 2.5:
+                    if await self._click_procaptcha(session_id, state.get("click")):
+                        sys.stderr.write(
+                            "[cdp_browser] clicked procaptcha widget via CDP\n"
+                        )
+                    last_procaptcha_click = now
+
             if ready == "complete" and not on_challenge:
                 return snapshot, False
             await asyncio.sleep(0.5)
@@ -614,7 +855,7 @@ class CdpBrowser:
         title = str(snapshot.get("title") or "")
         href = str(snapshot.get("href") or "")
         html = str(snapshot.get("html") or "")
-        timed_out = is_challenge_page(title, href, html)
+        timed_out = is_challenge_page(title, href, html) or pending_procaptcha(snapshot)
         return snapshot, timed_out
 
     async def _wait_minimum(
@@ -793,6 +1034,7 @@ class CdpBrowser:
             title = str(snapshot.get("title") or "")
             final_url = str(snapshot.get("href") or "") or url
             html = str(snapshot.get("html") or "")
+            token = procaptcha_token(snapshot)
 
             doc: dict[str, Any] = {}
             if document_responses:
@@ -824,6 +1066,8 @@ class CdpBrowser:
                 and bodies_differ
             ):
                 content = outer_html.encode("utf-8")
+            elif token and outer_html:
+                content = outer_html.encode("utf-8")
             elif not network_content and outer_html:
                 content = outer_html.encode("utf-8")
             else:
@@ -831,7 +1075,7 @@ class CdpBrowser:
 
             still_challenge = is_challenge_page(
                 title, final_url, outer_html, body_len=len(content)
-            )
+            ) or pending_procaptcha(snapshot)
             if timed_out_on_challenge or still_challenge:
                 sys.stderr.write(
                     "[cdp_browser] fetch_page: challenge still present at return "
@@ -843,7 +1087,9 @@ class CdpBrowser:
                 f"href={final_url!r} title={title!r} "
                 f"network_len={network_len} outer_len={outer_len} "
                 f"bodies_differ={bodies_differ} "
-                f"challenge={still_challenge}\n"
+                f"challenge={still_challenge} "
+                f"procaptcha={bool(token)} "
+                f"kind={procaptcha_state(snapshot).get('kind') or '-'}\n"
             )
 
             cookies_result = await self.call(

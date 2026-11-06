@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>unfocused-click-fixture</title>
+</head>
+<body style="margin:0;background:#fff">
+  <div
+    class="cf-turnstile"
+    id="widget"
+    style="position:absolute;left:40px;top:40px;width:300px;height:65px;background:#f3f3f3;border:2px solid rgb(74,74,74);box-sizing:border-box"
+  >
+    <span id="status">waiting</span>
+  </div>
+  <script>
+    window.__clicked = false;
+    window.__clicks = [];
+    const widget = document.getElementById("widget");
+    function mark(ev) {
+      window.__clicked = true;
+      window.__clicks.push({
+        type: ev.type,
+        x: ev.clientX,
+        y: ev.clientY,
+      });
+      document.getElementById("status").textContent = "clicked";
+    }
+    widget.addEventListener("mousedown", mark);
+    widget.addEventListener("mouseup", mark);
+    widget.addEventListener("click", mark);
+  </script>
+</body>
+</html>
