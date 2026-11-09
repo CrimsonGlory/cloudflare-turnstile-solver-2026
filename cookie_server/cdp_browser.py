@@ -5,13 +5,30 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import os
 import sys
 import urllib.request
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 from urllib.parse import urlparse, urlunparse
 
 from cookie_server.ws import ws_close, ws_connect, ws_mask, ws_recv
+
+try:
+    from cookie_server.puzzle import (
+        board_rect_from_state,
+        decode_image,
+        human_drag_path,
+        match_piece,
+    )
+
+    _PUZZLE_MATCH_AVAILABLE = True
+except ImportError:  # numpy / Pillow missing from the image
+    board_rect_from_state = None  # type: ignore[assignment]
+    decode_image = None  # type: ignore[assignment]
+    human_drag_path = None  # type: ignore[assignment]
+    match_piece = None  # type: ignore[assignment]
+    _PUZZLE_MATCH_AVAILABLE = False
 
 CF_MARKERS = (
     "one moment please",
@@ -31,30 +48,22 @@ CF_DOM_MARKERS = (
 CF_INTERSTITIAL_BODY_LEN = 5371
 CF_POST_CLICK_BODY_LEN = 5985
 
-# Procaptcha (frictionless / PoW) inspects light DOM and open shadow roots.
-# Puzzle and image challenges open a role=dialog surface; those are reported
-# as kind=visual and left unsolved.
+# Procaptcha inspects light DOM and open shadow roots. Checkbox / invisible
+# PoW is clicked; the puzzle overlay is matched and dragged; image dialogs
+# are reported as kind=visual and left unsolved.
 _PROSOPO_INSPECT_JS = """
 function inspectProcaptcha() {
   try {
     var tokenEl = document.querySelector('[name="procaptcha-response"]');
     var token = tokenEl && tokenEl.value ? String(tokenEl.value).trim() : '';
     var widget = document.querySelector(
-      '.procaptcha, .p-procaptcha, .prosopo-widget, .prosopo-checkbox, prosopo-procaptcha'
+      '.procaptcha, .p-procaptcha, .prosopo-widget, .prosopo-checkbox, prosopo-procaptcha, .prosopo-puzzle-piece'
     );
     if (!widget && !token) {
       return { present: false, solved: false };
     }
     if (token) {
       return { present: true, solved: true, kind: 'solved', token: token };
-    }
-
-    var dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
-    for (var d = 0; d < dialogs.length; d++) {
-      var dr = dialogs[d].getBoundingClientRect();
-      if (dr.width >= 80 && dr.height >= 80) {
-        return { present: true, solved: false, kind: 'visual' };
-      }
     }
 
     function clickPoint(el, xRatio) {
@@ -107,6 +116,71 @@ function inspectProcaptcha() {
       return walkShadows(root, function (scope) {
         return scope.querySelector('[role="progressbar"], [role="status"]');
       });
+    }
+
+    function findPuzzlePiece(root) {
+      // Live widget paints a hidden, aria-hidden clone first. That node has
+      // no background and is not the draggable overlay.
+      return walkShadows(root, function (scope) {
+        var nodes = scope.querySelectorAll('.prosopo-puzzle-piece');
+        var fallback = null;
+        for (var p = 0; p < nodes.length; p++) {
+          var el = nodes[p];
+          var cs = window.getComputedStyle(el);
+          if (el.getAttribute('aria-hidden') === 'true') continue;
+          if (cs.opacity === '0' || cs.pointerEvents === 'none') continue;
+          var bg = cs.backgroundImage || '';
+          if (bg && bg !== 'none') return el;
+          if (!fallback) fallback = el;
+        }
+        return fallback;
+      });
+    }
+
+    var puzzlePiece = findPuzzlePiece(document);
+    if (puzzlePiece) {
+      var area = puzzlePiece.parentElement;
+      var ar = area ? area.getBoundingClientRect() : puzzlePiece.getBoundingClientRect();
+      var pr = puzzlePiece.getBoundingClientRect();
+      if (ar.width >= 40 && ar.height >= 40 && pr.width >= 8 && pr.height >= 8) {
+        var pieceSize = puzzlePiece.offsetWidth || pr.width;
+        return {
+          present: true,
+          solved: false,
+          kind: 'puzzle',
+          originX: (puzzlePiece.offsetLeft || 0) + pieceSize / 2,
+          originY: (puzzlePiece.offsetTop || 0) + (puzzlePiece.offsetHeight || pr.height) / 2,
+          pieceSize: pieceSize,
+          board: {
+            left: ar.left,
+            top: ar.top,
+            width: ar.width,
+            height: ar.height
+          },
+          piece: {
+            left: pr.left,
+            top: pr.top,
+            width: pr.width,
+            height: pr.height
+          }
+        };
+      }
+    }
+
+    var dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+    for (var d = 0; d < dialogs.length; d++) {
+      var dr = dialogs[d].getBoundingClientRect();
+      if (dr.width >= 80 && dr.height >= 80) {
+        var dialogText = '';
+        try { dialogText = String(dialogs[d].textContent || ''); } catch (e) {}
+        // The puzzle overlay is itself a dialog. Before the piece is
+        // measurable, treat it as still loading rather than as the
+        // unsolved image captcha.
+        if (/drag the piece|puzzle challenge|not quite/i.test(dialogText)) {
+          return { present: true, solved: false, kind: 'pending', loading: true };
+        }
+        return { present: true, solved: false, kind: 'visual' };
+      }
     }
 
     var checkbox = null;
@@ -189,6 +263,123 @@ _PROSOPO_EXECUTE_JS = """(() => {
     cancelable: true
   }));
   return { executed: true, via: 'event' };
+})()"""
+
+_PROSOPO_PUZZLE_EXTRACT_JS = """(async () => {
+  function walkShadows(root, visit) {
+    if (!root) return null;
+    var hit = visit(root);
+    if (hit) return hit;
+    if (root.shadowRoot) {
+      var fromRoot = walkShadows(root.shadowRoot, visit);
+      if (fromRoot) return fromRoot;
+    }
+    var nodes = root.querySelectorAll('*');
+    for (var n = 0; n < nodes.length; n++) {
+      if (nodes[n].shadowRoot) {
+        var nested = walkShadows(nodes[n].shadowRoot, visit);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  }
+  function cssUrl(value) {
+    if (!value || value === 'none') return '';
+    var match = String(value).match(/url\\((['\"]?)(.+?)\\1\\)/);
+    if (!match) return '';
+    return String(match[2] || '').replace(/^['\"]|['\"]$/g, '');
+  }
+  async function rasterize(src, width, height) {
+    if (!src) return '';
+    var img = new Image();
+    img.src = src;
+    await img.decode();
+    var w = width || img.naturalWidth || img.width;
+    var h = height || img.naturalHeight || img.height;
+    if (!w || !h) return '';
+    var canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    var ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    return canvas.toDataURL('image/png');
+  }
+  var piece = walkShadows(document, function (scope) {
+    var nodes = scope.querySelectorAll('.prosopo-puzzle-piece');
+    var fallback = null;
+    for (var p = 0; p < nodes.length; p++) {
+      var el = nodes[p];
+      var cs = getComputedStyle(el);
+      if (el.getAttribute('aria-hidden') === 'true') continue;
+      if (cs.opacity === '0' || cs.pointerEvents === 'none') continue;
+      var bg = cs.backgroundImage || '';
+      if (bg && bg !== 'none') return el;
+      if (!fallback) fallback = el;
+    }
+    return fallback;
+  });
+  if (!piece) return { ready: false, reason: 'no_piece' };
+  var area = piece.parentElement;
+  if (!area) return { ready: false, reason: 'no_board' };
+  var boardRect = area.getBoundingClientRect();
+  var pieceRect = piece.getBoundingClientRect();
+  if (boardRect.width < 40 || boardRect.height < 40) {
+    return { ready: false, reason: 'board_size' };
+  }
+  var backgroundSrc = '';
+  var tiles = area.querySelectorAll('img');
+  for (var i = 0; i < tiles.length; i++) {
+    var tile = tiles[i];
+    if (tile && tile.src) {
+      // Centre kaleidoscope tile is at local (300, 200); any tile's src
+      // is the same data URI, so the first non-empty src is enough.
+      backgroundSrc = tile.src;
+      if (Math.abs((parseFloat(tile.style.left) || 0) - 300) < 1 &&
+          Math.abs((parseFloat(tile.style.top) || 0) - 200) < 1) {
+        break;
+      }
+    }
+  }
+  if (!backgroundSrc) {
+    backgroundSrc = cssUrl(getComputedStyle(area).backgroundImage);
+  }
+  var pieceSrc = cssUrl(getComputedStyle(piece).backgroundImage);
+  if (!backgroundSrc || !pieceSrc) {
+    return { ready: false, reason: 'missing_src' };
+  }
+  var pieceSize = piece.offsetWidth || pieceRect.width;
+  var background;
+  var overlay;
+  try {
+    background = await rasterize(backgroundSrc, 300, 200);
+    overlay = await rasterize(pieceSrc, Math.round(pieceSize), Math.round(piece.offsetHeight || pieceSize));
+  } catch (err) {
+    return { ready: false, reason: 'decode', error: String(err) };
+  }
+  if (!background || !overlay) {
+    return { ready: false, reason: 'empty_raster' };
+  }
+  return {
+    ready: true,
+    originX: (piece.offsetLeft || 0) + pieceSize / 2,
+    originY: (piece.offsetTop || 0) + (piece.offsetHeight || pieceRect.height) / 2,
+    pieceSize: pieceSize,
+    board: {
+      left: boardRect.left,
+      top: boardRect.top,
+      width: boardRect.width,
+      height: boardRect.height
+    },
+    pieceRect: {
+      left: pieceRect.left,
+      top: pieceRect.top,
+      width: pieceRect.width,
+      height: pieceRect.height
+    },
+    background: background,
+    piece: overlay
+  };
 })()"""
 
 _TURNSTILE_IFRAME_JS = """(() => {
@@ -608,6 +799,16 @@ class CdpBrowser:
             },
             session_id=session_id,
         )
+        if isinstance(result, dict) and result.get("exceptionDetails"):
+            detail = result["exceptionDetails"]
+            exc = (detail.get("exception") or {}) if isinstance(detail, dict) else {}
+            text = (
+                (detail.get("text") if isinstance(detail, dict) else None)
+                or exc.get("description")
+                or exc.get("value")
+                or detail
+            )
+            raise RuntimeError(text)
         inner = (result or {}).get("result") or {}
         if inner.get("subtype") == "error":
             raise RuntimeError(inner.get("description") or inner)
@@ -718,6 +919,164 @@ class CdpBrowser:
         result = await self.evaluate(_PROSOPO_EXECUTE_JS, session_id)
         return bool(isinstance(result, dict) and result.get("executed"))
 
+    async def _drag_path(
+        self,
+        session_id: str,
+        points: Sequence[tuple[float, float]],
+        *,
+        step_delay: float = 0.008,
+    ) -> bool:
+        if len(points) < 2:
+            return False
+        start_x, start_y = points[0]
+        await self.call(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mouseMoved",
+                "x": start_x,
+                "y": start_y,
+                "button": "left",
+                "buttons": 0,
+            },
+            session_id=session_id,
+        )
+        await asyncio.sleep(0.04)
+        await self.call(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mousePressed",
+                "x": start_x,
+                "y": start_y,
+                "button": "left",
+                "buttons": 1,
+                "clickCount": 1,
+            },
+            session_id=session_id,
+        )
+        await asyncio.sleep(0.03)
+        for x, y in points[1:]:
+            await self.call(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mouseMoved",
+                    "x": x,
+                    "y": y,
+                    "button": "left",
+                    "buttons": 1,
+                },
+                session_id=session_id,
+            )
+            if step_delay > 0:
+                await asyncio.sleep(step_delay)
+        end_x, end_y = points[-1]
+        await asyncio.sleep(0.04)
+        await self.call(
+            "Input.dispatchMouseEvent",
+            {
+                "type": "mouseReleased",
+                "x": end_x,
+                "y": end_y,
+                "button": "left",
+                "buttons": 0,
+                "clickCount": 1,
+            },
+            session_id=session_id,
+        )
+        return True
+
+    async def _solve_procaptcha_puzzle(
+        self,
+        session_id: str,
+        state: dict[str, Any] | None = None,
+    ) -> tuple[float, float] | None:
+        if not _PUZZLE_MATCH_AVAILABLE:
+            return None
+        try:
+            extracted = await self.evaluate(_PROSOPO_PUZZLE_EXTRACT_JS, session_id)
+        except Exception as exc:
+            sys.stderr.write(
+                f"[cdp_browser] procaptcha puzzle extract failed: {exc}\n"
+            )
+            return None
+        if not isinstance(extracted, dict) or not extracted.get("ready"):
+            reason = (
+                extracted.get("reason")
+                if isinstance(extracted, dict)
+                else "no_extract"
+            )
+            sys.stderr.write(
+                f"[cdp_browser] procaptcha puzzle images not ready ({reason})\n"
+            )
+            return None
+        try:
+            background = decode_image(str(extracted.get("background") or ""))
+            piece = decode_image(str(extracted.get("piece") or ""))
+            origin = (
+                float(extracted.get("originX")),
+                float(extracted.get("originY")),
+            )
+        except Exception as exc:
+            sys.stderr.write(
+                f"[cdp_browser] procaptcha puzzle decode failed: {exc}\n"
+            )
+            return None
+        try:
+            match = match_piece(background, piece, origin)
+        except Exception as exc:
+            sys.stderr.write(
+                f"[cdp_browser] procaptcha puzzle match failed: {exc}\n"
+            )
+            return None
+        board = board_rect_from_state(extracted) or board_rect_from_state(state or {})
+        if board is None:
+            sys.stderr.write("[cdp_browser] procaptcha puzzle has no board rect\n")
+            return None
+        # Entrance animation scales the panel from 0.9 to 1. The widget
+        # converts clientX - boardLeft into local pixels with no scale
+        # factor, so a drag during that animation (or at browser zoom)
+        # must move by the unscaled image delta from the press point.
+        if board.width < 280 or board.height < 185:
+            sys.stderr.write(
+                "[cdp_browser] procaptcha puzzle board still scaling "
+                f"({board.width:.1f}x{board.height:.1f})\n"
+            )
+            return None
+        piece_rect = extracted.get("pieceRect") if isinstance(extracted, dict) else None
+        if isinstance(piece_rect, dict):
+            try:
+                press = (
+                    float(piece_rect["left"]) + float(piece_rect["width"]) / 2.0,
+                    float(piece_rect["top"]) + float(piece_rect["height"]) / 2.0,
+                )
+            except (KeyError, TypeError, ValueError):
+                press = board.to_viewport(origin[0], origin[1])
+        else:
+            press = board.to_viewport(origin[0], origin[1])
+        image_path = human_drag_path(origin[0], origin[1], match.x, match.y)
+        path = [
+            (press[0] + (x - origin[0]), press[1] + (y - origin[1]))
+            for x, y in image_path
+        ]
+        if len(path) < 2:
+            path = [
+                press,
+                (press[0] + (match.x - origin[0]), press[1] + (match.y - origin[1])),
+            ]
+        sys.stderr.write(
+            "[cdp_browser] procaptcha puzzle match "
+            f"origin=({origin[0]:.1f},{origin[1]:.1f}) "
+            f"target=({match.x:.1f},{match.y:.1f}) "
+            f"score={match.score:.3f} ncc={match.ncc:.3f} "
+            f"edge={match.ncc_edge:.3f} dark={match.darkness:.3f}\n"
+        )
+        dragged = await self._drag_path(session_id, path)
+        if dragged:
+            sys.stderr.write(
+                "[cdp_browser] dragged procaptcha puzzle piece via CDP\n"
+            )
+            return (match.x, match.y)
+        return None
+
     async def _wait_for_page_clearance(
         self,
         target_id: str,
@@ -731,6 +1090,7 @@ class CdpBrowser:
         last_focus = 0.0
         last_cdp_click = 0.0
         last_procaptcha_click = 0.0
+        last_puzzle_drag: float | None = None
         last_submit = 0.0
         last_reload = 0.0
         stuck_challenge_since: float | None = None
@@ -738,6 +1098,9 @@ class CdpBrowser:
         max_reloads = 3
         procaptcha_executed = False
         logged_visual = False
+        last_puzzle_key: tuple[int, int, int] | None = None
+        last_drag_dest: tuple[float, float] | None = None
+        puzzle_ready_at = 0.0
 
         while loop.time() < max_deadline:
             now = loop.time()
@@ -825,11 +1188,52 @@ class CdpBrowser:
             if on_prosopo:
                 state = procaptcha_state(snapshot)
                 kind = str(state.get("kind") or "")
-                if kind == "visual":
+                if kind == "puzzle":
+                    try:
+                        origin_x = float(state.get("originX") or 0)
+                        origin_y = float(state.get("originY") or 0)
+                        puzzle_key = (
+                            int(round(origin_x)),
+                            int(round(origin_y)),
+                            int(round(float(state.get("pieceSize") or 0))),
+                        )
+                    except (TypeError, ValueError):
+                        origin_x = 0.0
+                        origin_y = 0.0
+                        puzzle_key = (0, 0, 0)
+                    sitting_on_drop = (
+                        last_drag_dest is not None
+                        and math.hypot(
+                            origin_x - last_drag_dest[0],
+                            origin_y - last_drag_dest[1],
+                        )
+                        < 22
+                    )
+                    if sitting_on_drop:
+                        pass
+                    else:
+                        if last_puzzle_key != puzzle_key:
+                            last_puzzle_key = puzzle_key
+                            # Entrance scale(0.9)→scale(1) is 0.3s; wait it out
+                            # so clientX maps 1:1 onto the 300×200 board.
+                            puzzle_ready_at = now + 0.45
+                        cooled = (
+                            last_puzzle_drag is None
+                            or now - last_puzzle_drag >= 1.2
+                        )
+                        if now >= puzzle_ready_at and cooled:
+                            dest = await self._solve_procaptcha_puzzle(
+                                session_id, state
+                            )
+                            if dest:
+                                last_puzzle_drag = now
+                                last_drag_dest = dest
+                                puzzle_ready_at = now + 4.0
+                elif kind == "visual":
                     if not logged_visual:
                         sys.stderr.write(
-                            "[cdp_browser] procaptcha visual challenge present; "
-                            "puzzle/image is not solved yet\n"
+                            "[cdp_browser] procaptcha image challenge present; "
+                            "image captcha is not solved\n"
                         )
                         logged_visual = True
                     return snapshot, True

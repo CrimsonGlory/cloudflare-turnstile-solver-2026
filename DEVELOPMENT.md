@@ -170,7 +170,7 @@ Python service started by the Docker entrypoint.
 - Connects to a pool of Chrome processes over CDP. `--cdp` / `CDP_URL` is the endpoint for index 0 (`http://127.0.0.1:9222`); later indexes use `CDP_PORT + i`
 - Pool size is the number of Chromes that actually came up, logged at startup. A dead Chrome fails only the request that held it; the entrypoint relaunches that process and later requests reconnect
 - Per request: check out one slot → navigate that Chrome's tab → wait for load / challenge → optional `min_wait` → `Network.getCookies` → release the slot
-- Cloudflare Turnstile interstitials are clicked with CDP `Input.dispatchMouseEvent`. Visible Prosopo Procaptcha widgets (frictionless PoW and dedicated PoW checkbox) are clicked the same way and the tab is held until a `procaptcha-response` token appears. If frictionless escalates to a puzzle or image dialog, that is detected and the wait ends unsolved.
+- Cloudflare Turnstile interstitials are clicked with CDP `Input.dispatchMouseEvent`. Visible Prosopo Procaptcha widgets (frictionless PoW and dedicated PoW checkbox) are clicked the same way and the tab is held until a `procaptcha-response` token appears. Puzzle dialogs are matched in image space (overlay onto the darkened cut, including inner overlap lines) and dragged with a trusted CDP mouse path so the widget records `puzzleEvents` itself. Image dialogs are detected and the wait ends unsolved.
 - Parallel slots never share a cookie jar (separate `--user-data-dir`). A fifth caller waits up to `QUEUE_TIMEOUT` then gets HTTP 503; it does not block on another caller's page timeout
 
 Callers use this by POSTing the usual `{"url", "timeout", "min_wait"}` JSON from several workers at once to the same `http://turnstile:8081/v1/get` (or `/v1/cookies`). The server assigns a Chrome per in-flight POST. Set `BROWSER_COUNT` to that worker count and raise compose `shm_size` (~2 GB × count). See README [Concurrent workers](README.md#concurrent-workers) for the `.env` / compose snippet, the client HTTP timeout `(2 * timeout) + min_wait + 20`, and a threaded example.
@@ -187,7 +187,7 @@ python3 -m unittest discover -s tests -v
 
 `tests/test_unfocused_cdp_click.py` additionally launches headed Chrome on Xvfb when `google-chrome-stable` and `Xvfb` are installed, and checks that `Input.dispatchMouseEvent` on one slot's session clicks that slot's widget while another window has OS focus.
 
-`tests/test_procaptcha.py` covers the Procaptcha wait loop with a fake CDP session. `tests/test_procaptcha_cdp_click.py` launches headed Chrome and confirms a trusted CDP click fills `procaptcha-response` on a widget that ignores scripted clicks. Live demo solves (`tests/test_procaptcha_live.py`) run only when `PROSOPO_LIVE=1`.
+`tests/test_procaptcha.py` covers the Procaptcha wait loop with a fake CDP session. `tests/test_procaptcha_puzzle.py` covers overlay matching and the puzzle drag path. `tests/test_procaptcha_cdp_click.py` launches headed Chrome and confirms a trusted CDP click fills `procaptcha-response` on a widget that ignores scripted clicks. Live demo solves (`tests/test_procaptcha_live.py`) run only when `PROSOPO_LIVE=1`.
 
 ---
 

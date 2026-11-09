@@ -2,7 +2,7 @@
 """Live Procaptcha solves against js.prosopo.io / demo.prosopo.io.
 
 Skipped unless headed Chrome, Xvfb, and PROSOPO_LIVE=1 are available.
-Puzzle and image challenges are out of scope; a visual challenge fails the test.
+Image challenges are out of scope; a kind=visual result fails or skips.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ LIVE = os.environ.get("PROSOPO_LIVE") == "1"
 
 POW_DEMO = "https://demo.prosopo.io/pow-implicit.html"
 FRICTIONLESS_DEMO = "https://demo.prosopo.io/frictionless-implicit.html"
+PUZZLE_DEMO = "https://demo.prosopo.io/puzzle-implicit.html"
 
 
 def _free_port() -> int:
@@ -74,8 +75,15 @@ class ProcaptchaLiveTest(unittest.TestCase):
         print("\n[procaptcha-live frictionless] " + "; ".join(f"{k}={v}" for k, v in record.items()), flush=True)
         if record.get("kind") == "visual":
             self.skipTest(
-                "frictionless detector served a puzzle/image challenge; those are not solved yet"
+                "frictionless detector served an image challenge; image captcha is not solved"
             )
+        self.assertTrue(record["solved"], record)
+        self.assertTrue(record["token"], record)
+
+    def test_puzzle_demo(self) -> None:
+        record = asyncio.run(self._solve_url(PUZZLE_DEMO, timeout=45.0))
+        print("\n[procaptcha-live puzzle] " + "; ".join(f"{k}={v}" for k, v in record.items()), flush=True)
+        self.assertNotEqual(record["kind"], "visual", record)
         self.assertTrue(record["solved"], record)
         self.assertTrue(record["token"], record)
 

@@ -55,9 +55,9 @@ def ws_mask(payload: bytes, opcode: int = 0x2) -> bytes:
     return bytes(header) + masked
 
 
-async def ws_recv(reader) -> bytes:
+async def _ws_read_frame(reader) -> tuple[int, bool, bytes]:
     h = await reader.readexactly(2)
-    fin = h[0] & 0x80
+    fin = bool(h[0] & 0x80)
     opcode = h[0] & 0x0F
     masked = h[1] & 0x80
     length = h[1] & 0x7F
@@ -70,15 +70,36 @@ async def ws_recv(reader) -> bytes:
     if masked:
         for i, b in enumerate(data):
             data[i] = b ^ mask[i % 4]
-    if opcode == 0x8:
-        raise ConnectionError("server closed the websocket")
-    if opcode == 0x9:
-        return bytes(data)
-    if opcode not in (0x1, 0x2):
-        raise RuntimeError(f"unexpected websocket opcode {opcode}")
-    if not fin:
-        raise RuntimeError("fragmented frames are not supported")
-    return bytes(data)
+    return opcode, fin, bytes(data)
+
+
+async def ws_recv(reader) -> bytes:
+    """Read one logical message, reassembling fragmented data frames."""
+    chunks: list[bytes] = []
+    message_opcode: int | None = None
+    while True:
+        opcode, fin, data = await _ws_read_frame(reader)
+        if opcode == 0x8:
+            raise ConnectionError("server closed the websocket")
+        if opcode == 0x9:
+            if message_opcode is None:
+                return data
+            continue
+        if opcode == 0xA:
+            continue
+        if opcode in (0x1, 0x2):
+            if message_opcode is not None:
+                raise RuntimeError("data frame started while fragmenting")
+            message_opcode = opcode
+            chunks.append(data)
+        elif opcode == 0x0:
+            if message_opcode is None:
+                raise RuntimeError("continuation without a start frame")
+            chunks.append(data)
+        else:
+            raise RuntimeError(f"unexpected websocket opcode {opcode}")
+        if fin:
+            return b"".join(chunks)
 
 
 async def ws_close(writer) -> None:

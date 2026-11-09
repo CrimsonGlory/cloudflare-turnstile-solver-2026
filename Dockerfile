@@ -53,6 +53,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gnupg \
         locales \
         python3 \
+        python3-numpy \
+        python3-pil \
         openssl \
         xvfb \
         xauth \
