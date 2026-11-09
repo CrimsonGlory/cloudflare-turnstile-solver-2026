@@ -25,7 +25,7 @@ Changes made in this fork relative to the original project:
 | **Examples** | Added `examples/test_cookies.py` and `examples/fetch_with_cookies.py`. |
 | **Removed** | Windows-only `z-index-orderer` (not used in the Linux/Docker path). |
 | **Docs split** | README simplified for usage; detailed upstream docs moved to `DEVELOPMENT.md`. |
-| **Prosopo** | Cookie API clicks visible Procaptcha checkboxes (frictionless PoW and dedicated PoW) via CDP and waits for a `procaptcha-response` token. Puzzle challenges are solved by matching the overlay onto the darkened cut (including inner overlap lines) and dragging a trusted per-pixel mouse path. Image challenges are detected and left unsolved. |
+| **Prosopo** | Cookie API clicks visible Procaptcha checkboxes (frictionless PoW and dedicated PoW) via CDP and waits for a `procaptcha-response` token. Puzzle challenges are solved by matching the overlay onto the darkened cut (including inner overlap lines) and dragging a trusted per-pixel mouse path. Image-grid challenges are classified with CLIP and clicked; icon-order challenges match legend chips onto the board by hue. Unknown dialogs stay `kind=visual` and are left unsolved. |
 
 Token harvesting (`PAGE_OVERRIDE=1`, token server, harvester, clicker) is still available. See [DEVELOPMENT.md](DEVELOPMENT.md#token-harvesting).
 

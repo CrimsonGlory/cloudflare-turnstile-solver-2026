@@ -10,3 +10,6 @@ config/proxies.txt
 .idea
 .vscode
 .DS_Store
+cookie_server/models/*.onnx
+cookie_server/models/*.onnx.tmp
+cookie_server/models/tokenizer.json

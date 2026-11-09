@@ -53,8 +53,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gnupg \
         locales \
         python3 \
+        python3-pip \
         python3-numpy \
         python3-pil \
+        libgomp1 \
         openssl \
         xvfb \
         xauth \
@@ -125,6 +127,9 @@ RUN chmod +x /opt/solver/docker/entrypoint.sh \
         /opt/solver/extension.crx \
         /opt/solver/docker/extension_id.py \
         || echo "[build] CRX pack failed; runtime will fall back to --load-extension" \
+    && python3 -m pip install --break-system-packages --no-cache-dir onnxruntime \
+    && python3 -c "import sys; sys.path.insert(0, '/app'); from pathlib import Path; from cookie_server.clip_onnx import ensure_models; ensure_models(Path('/app/cookie_server/models'))" \
+        || echo "[build] CLIP models not downloaded; first image captcha will fetch them" \
     && chown -R solver:solver /app /data /opt/solver
 
 USER solver

@@ -7,6 +7,7 @@ import base64
 import json
 import math
 import os
+import random
 import sys
 import urllib.request
 from typing import Any, Callable, Sequence
@@ -30,6 +31,30 @@ except ImportError:  # numpy / Pillow missing from the image
     match_piece = None  # type: ignore[assignment]
     _PUZZLE_MATCH_AVAILABLE = False
 
+try:
+    from cookie_server.icon_order import (
+        BOARD_HEIGHT as ICON_BOARD_HEIGHT,
+        BOARD_WIDTH as ICON_BOARD_WIDTH,
+        decode_icon_images,
+        match_icon_order,
+    )
+
+    _ICON_ORDER_AVAILABLE = True
+except ImportError:
+    ICON_BOARD_HEIGHT = 200  # type: ignore[assignment]
+    ICON_BOARD_WIDTH = 300  # type: ignore[assignment]
+    decode_icon_images = None  # type: ignore[assignment]
+    match_icon_order = None  # type: ignore[assignment]
+    _ICON_ORDER_AVAILABLE = False
+
+try:
+    from cookie_server.image_captcha import classify_tiles
+
+    _IMAGE_CAPTCHA_AVAILABLE = True
+except ImportError:
+    classify_tiles = None  # type: ignore[assignment]
+    _IMAGE_CAPTCHA_AVAILABLE = False
+
 CF_MARKERS = (
     "one moment please",
     "just a moment",
@@ -49,8 +74,9 @@ CF_INTERSTITIAL_BODY_LEN = 5371
 CF_POST_CLICK_BODY_LEN = 5985
 
 # Procaptcha inspects light DOM and open shadow roots. Checkbox / invisible
-# PoW is clicked; the puzzle overlay is matched and dragged; image dialogs
-# are reported as kind=visual and left unsolved.
+# PoW is clicked; the puzzle overlay is matched and dragged; image grids are
+# classified with CLIP; icon-order legend chips are matched onto the board.
+# Unknown dialogs stay kind=visual and are left unsolved.
 _PROSOPO_INSPECT_JS = """
 function inspectProcaptcha() {
   try {
@@ -172,11 +198,21 @@ function inspectProcaptcha() {
       var dr = dialogs[d].getBoundingClientRect();
       if (dr.width >= 80 && dr.height >= 80) {
         var dialogText = '';
+        var dialogAria = '';
         try { dialogText = String(dialogs[d].textContent || ''); } catch (e) {}
+        try { dialogAria = String(dialogs[d].getAttribute('aria-label') || ''); } catch (e) {}
+        var blob = dialogAria + ' ' + dialogText;
+        if (/icon order challenge|select in this order|icons to select/i.test(blob)) {
+          return { present: true, solved: false, kind: 'icon_order' };
+        }
+        if (/select all containing|image challenge/i.test(blob)) {
+          return { present: true, solved: false, kind: 'image' };
+        }
         // The puzzle overlay is itself a dialog. Before the piece is
-        // measurable, treat it as still loading rather than as the
-        // unsolved image captcha.
-        if (/drag the piece|puzzle challenge|not quite/i.test(dialogText)) {
+        // measurable, treat it as still loading rather than as an
+        // unknown visual captcha. Icon-order retry also says "Not quite"
+        // and is classified above.
+        if (/drag the piece|puzzle challenge|not quite/i.test(blob)) {
           return { present: true, solved: false, kind: 'pending', loading: true };
         }
         return { present: true, solved: false, kind: 'visual' };
@@ -379,6 +415,188 @@ _PROSOPO_PUZZLE_EXTRACT_JS = """(async () => {
     },
     background: background,
     piece: overlay
+  };
+})()"""
+
+_PROSOPO_IMAGE_EXTRACT_JS = """(async () => {
+  function clickPoint(el) {
+    if (!el) return null;
+    var r = el.getBoundingClientRect();
+    if (r.width < 8 || r.height < 8) return null;
+    return {
+      x: r.left + r.width / 2,
+      y: r.top + r.height / 2,
+      left: r.left,
+      top: r.top,
+      width: r.width,
+      height: r.height
+    };
+  }
+  function clickableOf(node) {
+    var el = node;
+    while (el && el !== document.body) {
+      var role = '';
+      try { role = String(el.getAttribute('role') || ''); } catch (e) {}
+      if (el.tagName === 'BUTTON' || role === 'button') return el;
+      el = el.parentElement;
+    }
+    return node;
+  }
+  var dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+  var dialog = null;
+  for (var d = 0; d < dialogs.length; d++) {
+    var dr = dialogs[d].getBoundingClientRect();
+    if (dr.width >= 80 && dr.height >= 80) { dialog = dialogs[d]; break; }
+  }
+  if (!dialog) return { ready: false, reason: 'no_dialog' };
+  var dialogText = String(dialog.textContent || '');
+  var dialogAria = String(dialog.getAttribute('aria-label') || '');
+  var blob = dialogAria + ' ' + dialogText;
+  var label = '';
+  var match = blob.match(/Select all containing(?: the following)?:\\s*([\\s\\S]+?)\\s*If there are none/i);
+  if (match) label = String(match[1] || '').replace(/\\u00a0/g, ' ').trim();
+  var imgs = dialog.querySelectorAll('img');
+  var tiles = [];
+  var pending = 0;
+  for (var i = 0; i < imgs.length; i++) {
+    var img = imgs[i];
+    var alt = String(img.alt || '');
+    if (!/captcha image/i.test(alt)) continue;
+    try { await img.decode(); } catch (e) { pending++; }
+    var clickable = clickableOf(img);
+    var rect = img.getBoundingClientRect();
+    if (rect.width < 20 || rect.height < 20) continue;
+    if (!img.naturalWidth || img.naturalWidth < 8) {
+      pending++;
+      continue;
+    }
+    tiles.push({
+      index: tiles.length,
+      alt: alt,
+      src: String(img.currentSrc || img.src || '').slice(0, 240),
+      selected: String(clickable.getAttribute('aria-pressed') || '') === 'true',
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height,
+      click: clickPoint(clickable)
+    });
+  }
+  var next = null;
+  var controls = dialog.querySelectorAll('button, [role="button"]');
+  for (var c = 0; c < controls.length; c++) {
+    var el = controls[c];
+    var t = (String(el.getAttribute('aria-label') || '') + ' ' + String(el.textContent || '')).replace(/\\s+/g, ' ').trim();
+    var aria = String(el.getAttribute('aria-label') || '');
+    if (/^(next|submit)$/i.test(t) || /^(next|submit)\\b/i.test(aria) || /^(next|submit)$/i.test(String(el.textContent || '').trim())) {
+      next = clickPoint(el);
+      if (next) next.text = t;
+    }
+  }
+  if (pending || tiles.length < 9 || !label) {
+    return {
+      ready: false,
+      reason: 'incomplete',
+      label: label,
+      tileCount: tiles.length,
+      pending: pending
+    };
+  }
+  return {
+    ready: true,
+    kind: 'image',
+    label: label,
+    roundKey: label + '|' + tiles.map(function (t) { return t.src || (t.x + ',' + t.y); }).join('|'),
+    tiles: tiles,
+    next: next
+  };
+})()"""
+
+_PROSOPO_ICON_EXTRACT_JS = """(async () => {
+  async function rasterize(img, width, height) {
+    if (!img) return '';
+    try { await img.decode(); } catch (e) {}
+    var w = width || img.naturalWidth || Math.round(img.width);
+    var h = height || img.naturalHeight || Math.round(img.height);
+    if (!w || !h) return '';
+    var canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    var ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+    return canvas.toDataURL('image/png');
+  }
+  function clickPoint(el) {
+    if (!el) return null;
+    var r = el.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) return null;
+    return {
+      x: r.left + r.width / 2,
+      y: r.top + r.height / 2,
+      left: r.left,
+      top: r.top,
+      width: r.width,
+      height: r.height
+    };
+  }
+  var dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+  var dialog = null;
+  for (var d = 0; d < dialogs.length; d++) {
+    var dr = dialogs[d].getBoundingClientRect();
+    if (dr.width >= 80 && dr.height >= 80) { dialog = dialogs[d]; break; }
+  }
+  if (!dialog) return { ready: false, reason: 'no_dialog' };
+  var imgs = Array.from(dialog.querySelectorAll('img'));
+  var legendImg = null;
+  var boardImg = null;
+  for (var i = 0; i < imgs.length; i++) {
+    var img = imgs[i];
+    var alt = String(img.alt || '');
+    var nw = img.naturalWidth || 0;
+    var nh = img.naturalHeight || 0;
+    if (/icons to select/i.test(alt) || (nh && nh <= 40 && nw >= 40)) {
+      legendImg = img;
+    } else if (nw >= 200 && nh >= 120) {
+      boardImg = img;
+    }
+  }
+  if (!boardImg) {
+    for (var j = 0; j < imgs.length; j++) {
+      var r = imgs[j].getBoundingClientRect();
+      if (r.width >= 200 && r.height >= 120) boardImg = imgs[j];
+    }
+  }
+  if (!legendImg || !boardImg) {
+    return { ready: false, reason: 'missing_images', imgs: imgs.length };
+  }
+  var frame = boardImg.getBoundingClientRect();
+  if (frame.width < 200 || frame.height < 120) {
+    return { ready: false, reason: 'frame_size' };
+  }
+  var ok = null;
+  var controls = dialog.querySelectorAll('button, [role="button"]');
+  for (var c = 0; c < controls.length; c++) {
+    var t = (String(controls[c].getAttribute('aria-label') || '') + ' ' + String(controls[c].textContent || '')).trim();
+    if (/^(ok|okay|checking)/i.test(t)) ok = clickPoint(controls[c]);
+  }
+  var legendPng;
+  var boardPng;
+  try {
+    legendPng = await rasterize(legendImg);
+    boardPng = await rasterize(boardImg, 300, 200);
+  } catch (err) {
+    return { ready: false, reason: 'decode', error: String(err) };
+  }
+  if (!legendPng || !boardPng) return { ready: false, reason: 'empty_raster' };
+  return {
+    ready: true,
+    kind: 'icon_order',
+    legendIconSize: legendImg.naturalHeight || legendImg.height || 26,
+    frame: { left: frame.left, top: frame.top, width: frame.width, height: frame.height },
+    ok: ok,
+    legend: legendPng,
+    board: boardPng,
+    roundKey: String(legendImg.src || '').slice(0, 80) + '|' + String(boardImg.src || '').slice(0, 80)
   };
 })()"""
 
@@ -894,6 +1112,35 @@ class CdpBrowser:
                 params["buttons"] = 1 if pressed else 0
             await self.call("Input.dispatchMouseEvent", params, session_id=session_id)
 
+    async def _unique_click_at(
+        self,
+        session_id: str,
+        x: float,
+        y: float,
+        spread: float,
+        used: set[tuple[str, str]],
+        rng: random.Random,
+    ) -> None:
+        """Click near (x, y) with a pointer position that has not been used yet.
+
+        The image widget stores clientX/clientY and the provider rejects a
+        solution whose pointer samples repeat an identical (x, y) pair.
+        """
+        jx = float(x)
+        jy = float(y)
+        for _ in range(24):
+            jx = float(x) + rng.uniform(-spread, spread)
+            jy = float(y) + rng.uniform(-spread, spread)
+            marker = (f"{jx:.4f}", f"{jy:.4f}")
+            if marker not in used:
+                used.add(marker)
+                await self._click_at(session_id, jx, jy)
+                return
+        jx = float(x) + spread + rng.uniform(0.11, 0.37)
+        jy = float(y) - spread - rng.uniform(0.11, 0.37)
+        used.add((f"{jx:.4f}", f"{jy:.4f}"))
+        await self._click_at(session_id, jx, jy)
+
     async def _click_coords(self, session_id: str, coords: Any) -> bool:
         if not isinstance(coords, dict):
             return False
@@ -1077,6 +1324,205 @@ class CdpBrowser:
             return (match.x, match.y)
         return None
 
+    async def _screenshot_png(self, session_id: str) -> Any:
+        result = await self.call(
+            "Page.captureScreenshot",
+            {"format": "png", "fromSurface": True},
+            session_id=session_id,
+        )
+        data = (result or {}).get("data")
+        if not data or decode_image is None:
+            return None
+        return decode_image("data:image/png;base64," + str(data))
+
+    def _crop_tile(self, screenshot: Any, tile: dict[str, Any], dpr: float) -> Any:
+        try:
+            left = float(tile["x"]) * dpr
+            top = float(tile["y"]) * dpr
+            width = float(tile["width"]) * dpr
+            height = float(tile["height"]) * dpr
+        except (KeyError, TypeError, ValueError):
+            return None
+        if screenshot is None or width < 8 or height < 8:
+            return None
+        x0 = max(0, int(round(left)))
+        y0 = max(0, int(round(top)))
+        x1 = min(int(screenshot.shape[1]), int(round(left + width)))
+        y1 = min(int(screenshot.shape[0]), int(round(top + height)))
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            return None
+        return screenshot[y0:y1, x0:x1]
+
+    async def _solve_procaptcha_image(
+        self,
+        session_id: str,
+        skip_key: str | None = None,
+    ) -> str | None:
+        if not _IMAGE_CAPTCHA_AVAILABLE or classify_tiles is None:
+            return None
+        try:
+            extracted = await self.evaluate(_PROSOPO_IMAGE_EXTRACT_JS, session_id)
+        except Exception as exc:
+            sys.stderr.write(
+                f"[cdp_browser] procaptcha image extract failed: {exc}\n"
+            )
+            return None
+        if not isinstance(extracted, dict) or not extracted.get("ready"):
+            return None
+        label = str(extracted.get("label") or "").strip()
+        tiles = extracted.get("tiles")
+        if not label or not isinstance(tiles, list) or len(tiles) < 9:
+            return None
+        round_key = str(extracted.get("roundKey") or label)
+        if skip_key is not None and round_key == skip_key:
+            return round_key
+        try:
+            dpr = float(
+                await self.evaluate("window.devicePixelRatio || 1", session_id) or 1
+            )
+        except Exception:
+            dpr = 1.0
+        screenshot = await self._screenshot_png(session_id)
+        if screenshot is None:
+            return None
+        images = []
+        usable: list[dict[str, Any]] = []
+        for tile in tiles:
+            if not isinstance(tile, dict):
+                continue
+            crop = self._crop_tile(screenshot, tile, dpr)
+            if crop is None:
+                continue
+            rgb = crop[..., :3] if getattr(crop, "ndim", 0) == 3 else crop
+            try:
+                variance = float(rgb.astype("float32").std())
+            except (AttributeError, TypeError, ValueError):
+                variance = 0.0
+            if variance < 4.0:
+                continue
+            images.append(crop)
+            usable.append(tile)
+        if len(images) < 9:
+            return None
+        try:
+            scores = classify_tiles(label, images)
+        except Exception as exc:
+            sys.stderr.write(
+                f"[cdp_browser] procaptcha image classify failed: {exc}\n"
+            )
+            return None
+        chosen = [item.index for item in scores if item.selected]
+        sys.stderr.write(
+            "[cdp_browser] procaptcha image "
+            f"label={label!r} select={chosen} "
+            f"scores=[{', '.join(f'{item.score:.3f}' for item in scores)}]\n"
+        )
+        jitter = random.Random()
+        used: set[tuple[str, str]] = set()
+        for item in scores:
+            if item.index >= len(usable):
+                continue
+            tile = usable[item.index]
+            already = bool(tile.get("selected"))
+            if already == item.selected:
+                continue
+            click = tile.get("click") if isinstance(tile.get("click"), dict) else tile
+            try:
+                x = float(click["x"])
+                y = float(click["y"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            await self._unique_click_at(session_id, x, y, 6.0, used, jitter)
+            await asyncio.sleep(jitter.uniform(0.18, 0.42))
+        nxt = extracted.get("next")
+        if isinstance(nxt, dict):
+            await asyncio.sleep(jitter.uniform(0.25, 0.55))
+            try:
+                await self._unique_click_at(
+                    session_id,
+                    float(nxt["x"]),
+                    float(nxt["y"]),
+                    4.0,
+                    used,
+                    jitter,
+                )
+            except (KeyError, TypeError, ValueError):
+                pass
+        return round_key
+
+    async def _solve_procaptcha_icon_order(
+        self,
+        session_id: str,
+        skip_key: str | None = None,
+    ) -> str | None:
+        if not _ICON_ORDER_AVAILABLE or match_icon_order is None:
+            return None
+        try:
+            extracted = await self.evaluate(_PROSOPO_ICON_EXTRACT_JS, session_id)
+        except Exception as exc:
+            sys.stderr.write(
+                f"[cdp_browser] procaptcha icon-order extract failed: {exc}\n"
+            )
+            return None
+        if not isinstance(extracted, dict) or not extracted.get("ready"):
+            return None
+        round_key = str(extracted.get("roundKey") or "icon")
+        if skip_key is not None and round_key == skip_key:
+            return round_key
+        try:
+            board, legend = decode_icon_images(
+                extracted.get("board") or "",
+                extracted.get("legend") or "",
+            )
+        except Exception as exc:
+            sys.stderr.write(
+                f"[cdp_browser] procaptcha icon-order decode failed: {exc}\n"
+            )
+            return None
+        size = extracted.get("legendIconSize")
+        try:
+            legend_size = int(size) if size else None
+        except (TypeError, ValueError):
+            legend_size = None
+        hits = match_icon_order(board, legend, legend_icon_size=legend_size)
+        frame = extracted.get("frame") if isinstance(extracted.get("frame"), dict) else {}
+        try:
+            left = float(frame["left"])
+            top = float(frame["top"])
+            width = float(frame["width"])
+            height = float(frame["height"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if width < 80 or height < 60 or not hits:
+            return None
+        sys.stderr.write(
+            "[cdp_browser] procaptcha icon-order "
+            + " ".join(f"({hit.x:.1f},{hit.y:.1f}:{hit.score:.2f})" for hit in hits)
+            + "\n"
+        )
+        jitter = random.Random()
+        used: set[tuple[str, str]] = set()
+        for hit in hits:
+            x = left + (hit.x / ICON_BOARD_WIDTH) * width
+            y = top + (hit.y / ICON_BOARD_HEIGHT) * height
+            await self._unique_click_at(session_id, x, y, 2.5, used, jitter)
+            await asyncio.sleep(jitter.uniform(0.16, 0.38))
+        ok = extracted.get("ok")
+        if isinstance(ok, dict):
+            await asyncio.sleep(jitter.uniform(0.22, 0.48))
+            try:
+                await self._unique_click_at(
+                    session_id,
+                    float(ok["x"]),
+                    float(ok["y"]),
+                    3.0,
+                    used,
+                    jitter,
+                )
+            except (KeyError, TypeError, ValueError):
+                pass
+        return round_key
+
     async def _wait_for_page_clearance(
         self,
         target_id: str,
@@ -1101,6 +1547,12 @@ class CdpBrowser:
         last_puzzle_key: tuple[int, int, int] | None = None
         last_drag_dest: tuple[float, float] | None = None
         puzzle_ready_at = 0.0
+        last_image_key: str | None = None
+        last_image_solve: float | None = None
+        image_ready_at = 0.0
+        last_icon_key: str | None = None
+        last_icon_solve: float | None = None
+        icon_ready_at = 0.0
 
         while loop.time() < max_deadline:
             now = loop.time()
@@ -1229,11 +1681,41 @@ class CdpBrowser:
                                 last_puzzle_drag = now
                                 last_drag_dest = dest
                                 puzzle_ready_at = now + 4.0
+                elif kind == "image":
+                    if image_ready_at == 0.0:
+                        image_ready_at = now + 0.45
+                    cooled = (
+                        last_image_solve is None
+                        or now - last_image_solve >= 1.6
+                    )
+                    if now >= image_ready_at and cooled:
+                        key = await self._solve_procaptcha_image(
+                            session_id, skip_key=last_image_key
+                        )
+                        if key:
+                            last_image_key = key
+                            last_image_solve = now
+                            image_ready_at = now + 1.8
+                elif kind == "icon_order":
+                    if icon_ready_at == 0.0:
+                        icon_ready_at = now + 0.45
+                    cooled = (
+                        last_icon_solve is None
+                        or now - last_icon_solve >= 2.2
+                    )
+                    if now >= icon_ready_at and cooled:
+                        key = await self._solve_procaptcha_icon_order(
+                            session_id, skip_key=last_icon_key
+                        )
+                        if key:
+                            last_icon_key = key
+                            last_icon_solve = now
+                            icon_ready_at = now + 2.5
                 elif kind == "visual":
                     if not logged_visual:
                         sys.stderr.write(
-                            "[cdp_browser] procaptcha image challenge present; "
-                            "image captcha is not solved\n"
+                            "[cdp_browser] procaptcha unknown visual challenge; "
+                            "leaving unsolved\n"
                         )
                         logged_visual = True
                     return snapshot, True

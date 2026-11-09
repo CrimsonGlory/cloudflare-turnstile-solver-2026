@@ -2,7 +2,8 @@
 """Live Procaptcha solves against js.prosopo.io / demo.prosopo.io.
 
 Skipped unless headed Chrome, Xvfb, and PROSOPO_LIVE=1 are available.
-Image challenges are out of scope; a kind=visual result fails or skips.
+Unknown dialogs (`kind=visual`) are left unsolved; image-grid and icon-order
+demos are solved when CLIP / the icon matcher are available.
 """
 
 from __future__ import annotations
@@ -38,6 +39,8 @@ LIVE = os.environ.get("PROSOPO_LIVE") == "1"
 POW_DEMO = "https://demo.prosopo.io/pow-implicit.html"
 FRICTIONLESS_DEMO = "https://demo.prosopo.io/frictionless-implicit.html"
 PUZZLE_DEMO = "https://demo.prosopo.io/puzzle-implicit.html"
+IMAGE_DEMO = "https://demo.prosopo.io/image-implicit.html"
+ICON_ORDER_DEMO = "https://demo.prosopo.io/icon-order-implicit.html"
 
 
 def _free_port() -> int:
@@ -75,7 +78,7 @@ class ProcaptchaLiveTest(unittest.TestCase):
         print("\n[procaptcha-live frictionless] " + "; ".join(f"{k}={v}" for k, v in record.items()), flush=True)
         if record.get("kind") == "visual":
             self.skipTest(
-                "frictionless detector served an image challenge; image captcha is not solved"
+                "frictionless detector served an unknown visual challenge"
             )
         self.assertTrue(record["solved"], record)
         self.assertTrue(record["token"], record)
@@ -83,6 +86,20 @@ class ProcaptchaLiveTest(unittest.TestCase):
     def test_puzzle_demo(self) -> None:
         record = asyncio.run(self._solve_url(PUZZLE_DEMO, timeout=45.0))
         print("\n[procaptcha-live puzzle] " + "; ".join(f"{k}={v}" for k, v in record.items()), flush=True)
+        self.assertNotEqual(record["kind"], "visual", record)
+        self.assertTrue(record["solved"], record)
+        self.assertTrue(record["token"], record)
+
+    def test_image_demo(self) -> None:
+        record = asyncio.run(self._solve_url(IMAGE_DEMO, timeout=70.0))
+        print("\n[procaptcha-live image] " + "; ".join(f"{k}={v}" for k, v in record.items()), flush=True)
+        self.assertNotEqual(record["kind"], "visual", record)
+        self.assertTrue(record["solved"], record)
+        self.assertTrue(record["token"], record)
+
+    def test_icon_order_demo(self) -> None:
+        record = asyncio.run(self._solve_url(ICON_ORDER_DEMO, timeout=50.0))
+        print("\n[procaptcha-live icon-order] " + "; ".join(f"{k}={v}" for k, v in record.items()), flush=True)
         self.assertNotEqual(record["kind"], "visual", record)
         self.assertTrue(record["solved"], record)
         self.assertTrue(record["token"], record)

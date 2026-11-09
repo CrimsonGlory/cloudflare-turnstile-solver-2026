@@ -356,7 +356,7 @@ class PuzzleClearanceTest(unittest.TestCase):
         self.assertGreater(calls.count("Input.dispatchMouseEvent"), 4)
         self.assertNotIn("Page.reload", calls)
 
-    def test_image_challenge_is_still_unsolved(self) -> None:
+    def test_unknown_visual_challenge_is_still_unsolved(self) -> None:
         calls: list[str] = []
 
         async def run() -> None:
