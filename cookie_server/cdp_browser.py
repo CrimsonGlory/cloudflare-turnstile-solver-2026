@@ -146,10 +146,10 @@ function inspectProcaptcha() {
 
     function findPuzzlePiece(root) {
       // Live widget paints a hidden, aria-hidden clone first. That node has
-      // no background and is not the draggable overlay.
+      // no background and is not the draggable overlay. Only the visible
+      // piece with a background-image is used.
       return walkShadows(root, function (scope) {
         var nodes = scope.querySelectorAll('.prosopo-puzzle-piece');
-        var fallback = null;
         for (var p = 0; p < nodes.length; p++) {
           var el = nodes[p];
           var cs = window.getComputedStyle(el);
@@ -157,9 +157,8 @@ function inspectProcaptcha() {
           if (cs.opacity === '0' || cs.pointerEvents === 'none') continue;
           var bg = cs.backgroundImage || '';
           if (bg && bg !== 'none') return el;
-          if (!fallback) fallback = el;
         }
-        return fallback;
+        return null;
       });
     }
 
@@ -213,6 +212,10 @@ function inspectProcaptcha() {
         // unknown visual captcha. Icon-order retry also says "Not quite"
         // and is classified above.
         if (/drag the piece|puzzle challenge|not quite/i.test(blob)) {
+          return { present: true, solved: false, kind: 'pending', loading: true };
+        }
+        var trimmed = blob.replace(/\\s+/g, ' ').trim();
+        if (trimmed.length < 8) {
           return { present: true, solved: false, kind: 'pending', loading: true };
         }
         return { present: true, solved: false, kind: 'visual' };
@@ -343,7 +346,6 @@ _PROSOPO_PUZZLE_EXTRACT_JS = """(async () => {
   }
   var piece = walkShadows(document, function (scope) {
     var nodes = scope.querySelectorAll('.prosopo-puzzle-piece');
-    var fallback = null;
     for (var p = 0; p < nodes.length; p++) {
       var el = nodes[p];
       var cs = getComputedStyle(el);
@@ -351,9 +353,8 @@ _PROSOPO_PUZZLE_EXTRACT_JS = """(async () => {
       if (cs.opacity === '0' || cs.pointerEvents === 'none') continue;
       var bg = cs.backgroundImage || '';
       if (bg && bg !== 'none') return el;
-      if (!fallback) fallback = el;
     }
-    return fallback;
+    return null;
   });
   if (!piece) return { ready: false, reason: 'no_piece' };
   var area = piece.parentElement;
@@ -416,6 +417,41 @@ _PROSOPO_PUZZLE_EXTRACT_JS = """(async () => {
     background: background,
     piece: overlay
   };
+})()"""
+
+# Hidden aria-hidden clones sit in the same box as the visible piece and can
+# swallow hit-testing. Pointer events belong on the painted overlay.
+_PROSOPO_UNBLOCK_HIDDEN_PIECE_JS = """(() => {
+  function walkShadows(root, visit) {
+    if (!root) return null;
+    var hit = visit(root);
+    if (hit) return hit;
+    if (root.shadowRoot) {
+      var fromRoot = walkShadows(root.shadowRoot, visit);
+      if (fromRoot) return fromRoot;
+    }
+    var nodes = root.querySelectorAll('*');
+    for (var n = 0; n < nodes.length; n++) {
+      if (nodes[n].shadowRoot) {
+        var nested = walkShadows(nodes[n].shadowRoot, visit);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  }
+  var disabledHiddenPieces = 0;
+  walkShadows(document, function (scope) {
+    var nodes = scope.querySelectorAll('.prosopo-puzzle-piece');
+    for (var p = 0; p < nodes.length; p++) {
+      var el = nodes[p];
+      if (el.getAttribute('aria-hidden') === 'true') {
+        el.style.pointerEvents = 'none';
+        disabledHiddenPieces++;
+      }
+    }
+    return null;
+  });
+  return { disabledHiddenPieces: disabledHiddenPieces };
 })()"""
 
 _PROSOPO_IMAGE_EXTRACT_JS = """(async () => {
@@ -706,6 +742,58 @@ def procaptcha_state(snapshot: dict[str, Any] | None) -> dict[str, Any]:
 def pending_procaptcha(snapshot: dict[str, Any] | None) -> bool:
     state = procaptcha_state(snapshot)
     return bool(state.get("present") and not state.get("solved"))
+
+
+def is_human_check_shell(snapshot: dict[str, Any] | None) -> bool:
+    """True for the PimEyes-style Prosopo interstitial HTML.
+
+    The catalog opens ``/api/link/<id>`` and gets a ~7 KB shell titled
+    ``Confirm you are human`` with ``#captcha[data-sitekey]`` and the
+    Prosopo bundle. That document is not clearance until the page's own
+    callback navigates away.
+    """
+    snap = snapshot or {}
+    title = str(snap.get("title") or "")
+    html = str(snap.get("html") or "")
+    blob = f"{title}\n{html}".lower()
+    if "confirm you are human" in blob:
+        return True
+    lower_html = html.lower()
+    has_captcha_id = 'id="captcha"' in lower_html or "id='captcha'" in lower_html
+    return has_captcha_id and "data-sitekey" in lower_html
+
+
+def unresolved_procaptcha(snapshot: dict[str, Any] | None) -> bool:
+    """True while a Prosopo widget or human-check shell still needs work.
+
+    An unmounted shell has ``inspectProcaptcha()`` ``present: false`` and
+    ``readyState === complete``. A solved token sitting on the shell is
+    not done. Ordinary widget pages (token on the same URL, no shell
+    markers) clear once the token appears.
+    """
+    if is_human_check_shell(snapshot):
+        return True
+    if pending_procaptcha(snapshot):
+        return True
+    state = procaptcha_state(snapshot)
+    if state.get("present") and state.get("solved"):
+        return False
+    html = str((snapshot or {}).get("html") or "").lower()
+    return "procaptcha.bundle.js" in html
+
+
+def page_still_challenged(
+    snapshot: dict[str, Any] | None,
+    *,
+    body_len: int | None = None,
+) -> bool:
+    snap = snapshot or {}
+    title = str(snap.get("title") or "")
+    href = str(snap.get("href") or "")
+    html = str(snap.get("html") or "")
+    if is_challenge_page(title, href, html, body_len=body_len):
+        return True
+    return unresolved_procaptcha(snap)
 
 
 def procaptcha_token(snapshot: dict[str, Any] | None) -> str:
@@ -1166,6 +1254,29 @@ class CdpBrowser:
         result = await self.evaluate(_PROSOPO_EXECUTE_JS, session_id)
         return bool(isinstance(result, dict) and result.get("executed"))
 
+    async def _dispatch_pointer(
+        self,
+        session_id: str,
+        event_type: str,
+        x: float,
+        y: float,
+        *,
+        button: str = "none",
+        buttons: int = 0,
+        click_count: int | None = None,
+    ) -> None:
+        params: dict[str, Any] = {
+            "type": event_type,
+            "x": float(x),
+            "y": float(y),
+            "button": button,
+            "buttons": buttons,
+            "pointerType": "mouse",
+        }
+        if click_count is not None:
+            params["clickCount"] = click_count
+        await self.call("Input.dispatchMouseEvent", params, session_id=session_id)
+
     async def _drag_path(
         self,
         session_id: str,
@@ -1173,61 +1284,45 @@ class CdpBrowser:
         *,
         step_delay: float = 0.008,
     ) -> bool:
+        """Drag along viewport CSS-pixel points with the left button held.
+
+        Chrome turns these CDP mouse events into trusted pointer events on
+        the hit-tested node. ``button`` is ``none`` on moves; ``buttons``
+        stays 1 for the whole drag so the widget sees a held pointer.
+        """
         if len(points) < 2:
             return False
         start_x, start_y = points[0]
-        await self.call(
-            "Input.dispatchMouseEvent",
-            {
-                "type": "mouseMoved",
-                "x": start_x,
-                "y": start_y,
-                "button": "left",
-                "buttons": 0,
-            },
-            session_id=session_id,
+        await self._dispatch_pointer(
+            session_id, "mouseMoved", start_x, start_y, button="none", buttons=0
         )
         await asyncio.sleep(0.04)
-        await self.call(
-            "Input.dispatchMouseEvent",
-            {
-                "type": "mousePressed",
-                "x": start_x,
-                "y": start_y,
-                "button": "left",
-                "buttons": 1,
-                "clickCount": 1,
-            },
-            session_id=session_id,
+        await self._dispatch_pointer(
+            session_id,
+            "mousePressed",
+            start_x,
+            start_y,
+            button="left",
+            buttons=1,
+            click_count=1,
         )
         await asyncio.sleep(0.03)
         for x, y in points[1:]:
-            await self.call(
-                "Input.dispatchMouseEvent",
-                {
-                    "type": "mouseMoved",
-                    "x": x,
-                    "y": y,
-                    "button": "left",
-                    "buttons": 1,
-                },
-                session_id=session_id,
+            await self._dispatch_pointer(
+                session_id, "mouseMoved", x, y, button="none", buttons=1
             )
             if step_delay > 0:
                 await asyncio.sleep(step_delay)
         end_x, end_y = points[-1]
         await asyncio.sleep(0.04)
-        await self.call(
-            "Input.dispatchMouseEvent",
-            {
-                "type": "mouseReleased",
-                "x": end_x,
-                "y": end_y,
-                "button": "left",
-                "buttons": 0,
-                "clickCount": 1,
-            },
-            session_id=session_id,
+        await self._dispatch_pointer(
+            session_id,
+            "mouseReleased",
+            end_x,
+            end_y,
+            button="left",
+            buttons=0,
+            click_count=1,
         )
         return True
 
@@ -1235,6 +1330,7 @@ class CdpBrowser:
         self,
         session_id: str,
         state: dict[str, Any] | None = None,
+        tried: set[tuple[int, int, int, int]] | None = None,
     ) -> tuple[float, float] | None:
         if not _PUZZLE_MATCH_AVAILABLE:
             return None
@@ -1274,6 +1370,18 @@ class CdpBrowser:
                 f"[cdp_browser] procaptcha puzzle match failed: {exc}\n"
             )
             return None
+        if match is None:
+            sys.stderr.write(
+                "[cdp_browser] procaptcha puzzle match has no target "
+                "(flat piece interior or saturated ncc with weak edges)\n"
+            )
+            return None
+        if match.ncc >= 0.999 and match.ncc_edge < 0.25:
+            sys.stderr.write(
+                "[cdp_browser] procaptcha puzzle match rejected "
+                f"ncc={match.ncc:.3f} edge={match.ncc_edge:.3f}; re-extracting\n"
+            )
+            return None
         board = board_rect_from_state(extracted) or board_rect_from_state(state or {})
         if board is None:
             sys.stderr.write("[cdp_browser] procaptcha puzzle has no board rect\n")
@@ -1286,6 +1394,18 @@ class CdpBrowser:
             sys.stderr.write(
                 "[cdp_browser] procaptcha puzzle board still scaling "
                 f"({board.width:.1f}x{board.height:.1f})\n"
+            )
+            return None
+        attempt = (
+            int(round(origin[0])),
+            int(round(origin[1])),
+            int(round(match.x)),
+            int(round(match.y)),
+        )
+        if tried is not None and attempt in tried:
+            sys.stderr.write(
+                "[cdp_browser] procaptcha puzzle already dragged this "
+                "origin/target; not progress\n"
             )
             return None
         piece_rect = extracted.get("pieceRect") if isinstance(extracted, dict) else None
@@ -1316,13 +1436,45 @@ class CdpBrowser:
             f"score={match.score:.3f} ncc={match.ncc:.3f} "
             f"edge={match.ncc_edge:.3f} dark={match.darkness:.3f}\n"
         )
+        try:
+            await self.evaluate(_PROSOPO_UNBLOCK_HIDDEN_PIECE_JS, session_id)
+        except Exception:
+            pass
         dragged = await self._drag_path(session_id, path)
-        if dragged:
-            sys.stderr.write(
-                "[cdp_browser] dragged procaptcha puzzle piece via CDP\n"
-            )
+        if tried is not None:
+            tried.add(attempt)
+        if not dragged:
+            return None
+        sys.stderr.write(
+            "[cdp_browser] dragged procaptcha puzzle piece via CDP\n"
+        )
+        await asyncio.sleep(0.05)
+        try:
+            after = await self.evaluate(_PAGE_SNAPSHOT_JS, session_id) or {}
+        except Exception:
             return (match.x, match.y)
-        return None
+        after_state = procaptcha_state(after)
+        after_kind = str(after_state.get("kind") or "")
+        if after_state.get("solved") or after_kind in {"solved", "checkbox", "invisible"}:
+            return (match.x, match.y)
+        if after_kind and after_kind != "puzzle":
+            return (match.x, match.y)
+        try:
+            new_origin = (
+                float(after_state.get("originX") or 0),
+                float(after_state.get("originY") or 0),
+            )
+        except (TypeError, ValueError):
+            return (match.x, match.y)
+        if after_kind == "puzzle" and math.hypot(
+            new_origin[0] - origin[0], new_origin[1] - origin[1]
+        ) < 4.0:
+            sys.stderr.write(
+                "[cdp_browser] procaptcha puzzle drag did not move the piece "
+                f"origin=({origin[0]:.1f},{origin[1]:.1f})\n"
+            )
+            return None
+        return (match.x, match.y)
 
     async def _screenshot_png(self, session_id: str) -> Any:
         result = await self.call(
@@ -1553,6 +1705,7 @@ class CdpBrowser:
         last_icon_key: str | None = None
         last_icon_solve: float | None = None
         icon_ready_at = 0.0
+        tried_puzzle_drags: set[tuple[int, int, int, int]] = set()
 
         while loop.time() < max_deadline:
             now = loop.time()
@@ -1586,11 +1739,12 @@ class CdpBrowser:
                     html = str(snapshot.get("html") or "")
                     stuck_challenge_since = None
                     procaptcha_executed = False
+                    tried_puzzle_drags.clear()
                 last_href = href
 
             on_cf = is_challenge_page(title, href, html)
             on_prosopo = pending_procaptcha(snapshot)
-            on_challenge = on_cf or on_prosopo
+            on_challenge = on_cf or unresolved_procaptcha(snapshot)
             if on_cf:
                 if stuck_challenge_since is None:
                     stuck_challenge_since = now
@@ -1606,6 +1760,7 @@ class CdpBrowser:
                     stuck_challenge_since = None
                     last_href = ""
                     procaptcha_executed = False
+                    tried_puzzle_drags.clear()
                     try:
                         await self.wait_for_event(
                             "Page.loadEventFired",
@@ -1675,7 +1830,7 @@ class CdpBrowser:
                         )
                         if now >= puzzle_ready_at and cooled:
                             dest = await self._solve_procaptcha_puzzle(
-                                session_id, state
+                                session_id, state, tried_puzzle_drags
                             )
                             if dest:
                                 last_puzzle_drag = now
@@ -1738,10 +1893,7 @@ class CdpBrowser:
             await asyncio.sleep(0.5)
 
         snapshot = await self.evaluate(_PAGE_SNAPSHOT_JS, session_id) or {}
-        title = str(snapshot.get("title") or "")
-        href = str(snapshot.get("href") or "")
-        html = str(snapshot.get("html") or "")
-        timed_out = is_challenge_page(title, href, html) or pending_procaptcha(snapshot)
+        timed_out = page_still_challenged(snapshot)
         return snapshot, timed_out
 
     async def _wait_minimum(
@@ -1959,9 +2111,7 @@ class CdpBrowser:
             else:
                 content = network_content
 
-            still_challenge = is_challenge_page(
-                title, final_url, outer_html, body_len=len(content)
-            ) or pending_procaptcha(snapshot)
+            still_challenge = page_still_challenged(snapshot, body_len=len(content))
             if timed_out_on_challenge or still_challenge:
                 sys.stderr.write(
                     "[cdp_browser] fetch_page: challenge still present at return "

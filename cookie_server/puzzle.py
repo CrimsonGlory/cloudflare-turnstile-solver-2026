@@ -19,6 +19,7 @@ import base64
 import io
 import math
 import random
+import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,6 +28,13 @@ from PIL import Image
 
 BOARD_WIDTH = 300
 BOARD_HEIGHT = 200
+
+# A zero-mean luminance template with no variance used to be replaced by the
+# binary mask, which saturates NCC at 1 against a dull window. Live failures
+# were ncc=1.000 with edge under ~0.25; those peaks are not the cut.
+FLAT_TEMPLATE_SQ = 1e-3
+SATURATED_LUMA_NCC = 0.999
+WEAK_EDGE_NCC = 0.25
 
 
 @dataclass(frozen=True)
@@ -126,12 +134,16 @@ def match_piece(
     origin: tuple[float, float],
     *,
     exclude_radius: float | None = None,
-) -> PuzzleMatch:
+) -> PuzzleMatch | None:
     """Locate the darkened cut that matches ``piece``.
 
     ``origin`` is the current centre of the overlay in board pixels, and is
     excluded so a leftover composite cannot win. Returned ``x/y`` are the
     centre the widget should be dragged to (``finalX`` / ``finalY``).
+
+    Returns ``None`` when the piece interior has no luminance variance, or
+    when the winning peak is a saturated luminance NCC with a weak edge
+    score (a flat-template / dull-window artefact, not the cut).
     """
     bg_luma = _luma(background)
     piece_arr = piece.astype(np.float32)
@@ -174,9 +186,11 @@ def match_piece(
     tmean = float((piece_luma * luma_mask).sum() / n_luma)
     template = (piece_luma - tmean) * luma_mask
     template_sq = float((template * template).sum())
-    if template_sq < 1e-3:
-        template = luma_mask
-        template_sq = float((template * template).sum())
+    if template_sq < FLAT_TEMPLATE_SQ:
+        sys.stderr.write(
+            "[puzzle] piece interior has no luminance variance; no target\n"
+        )
+        return None
 
     sum_i = _fft_correlate(bg_p, luma_mask)
     sum_i2 = _fft_correlate(bg_p * bg_p, luma_mask)
@@ -225,12 +239,24 @@ def match_piece(
     score_v = np.where(valid, score, -1e9)
     peak = int(np.argmax(score_v))
     iy, ix = np.unravel_index(peak, score.shape)
+    if float(score_v[iy, ix]) < -1e8:
+        return None
+    ncc_val = float(ncc[iy, ix])
+    ncc_e_val = float(ncc_e[iy, ix])
+    # Saturated luminance NCC with a weak edge is the binary-mask /
+    # dull-window peak, not the cut. Do not let it win the argmax.
+    if ncc_val >= SATURATED_LUMA_NCC and ncc_e_val < WEAK_EDGE_NCC:
+        sys.stderr.write(
+            "[puzzle] saturated luminance ncc with weak edges; no target "
+            f"(ncc={ncc_val:.3f} edge={ncc_e_val:.3f})\n"
+        )
+        return None
     return PuzzleMatch(
         x=float(cx[iy, ix]),
         y=float(cy[iy, ix]),
         score=float(score[iy, ix]),
-        ncc=float(ncc[iy, ix]),
-        ncc_edge=float(ncc_e[iy, ix]),
+        ncc=ncc_val,
+        ncc_edge=ncc_e_val,
         darkness=float(darkness[iy, ix]),
     )
 

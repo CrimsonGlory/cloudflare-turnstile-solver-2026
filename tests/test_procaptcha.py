@@ -14,9 +14,23 @@ sys.path.insert(0, str(ROOT))
 
 from cookie_server.cdp_browser import (  # noqa: E402
     CdpBrowser,
+    is_human_check_shell,
+    page_still_challenged,
     pending_procaptcha,
     procaptcha_token,
+    unresolved_procaptcha,
 )
+
+HUMAN_CHECK_HTML = (
+    "<html><head><title>Confirm you are human</title></head><body>"
+    '<p id="prompt">Please confirm you are human to open this link.</p>'
+    '<div id="captcha" data-sitekey="test-key" data-sessionid="sess" '
+    'data-sessiontoken="tok"></div>'
+    '<script type="module" src="https://js.prosopo.io/js/procaptcha.bundle.js">'
+    "</script></body></html>"
+)
+SHELL_HREF = "https://example.com/api/link/test"
+DEST_HREF = "https://cdn.example.com/photo.jpg"
 
 
 def _snapshot(
@@ -34,6 +48,26 @@ def _snapshot(
     }
     if procaptcha is not None:
         payload["procaptcha"] = procaptcha
+    return payload
+
+
+def _shell_snapshot(
+    *,
+    ready: str = "complete",
+    href: str = SHELL_HREF,
+    procaptcha: dict[str, Any] | None = None,
+    html: str = HUMAN_CHECK_HTML,
+    title: str = "Confirm you are human",
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "ready": ready,
+        "title": title,
+        "href": href,
+        "html": html,
+        "procaptcha": procaptcha
+        if procaptcha is not None
+        else {"present": False, "solved": False},
+    }
     return payload
 
 
@@ -60,6 +94,59 @@ class ProcaptchaStateTest(unittest.TestCase):
         }
         self.assertFalse(pending_procaptcha(snap))
         self.assertEqual(procaptcha_token(snap), "abc")
+
+    def test_unmounted_human_check_shell_is_unresolved(self) -> None:
+        snap = _shell_snapshot()
+        self.assertTrue(is_human_check_shell(snap))
+        self.assertFalse(pending_procaptcha(snap))
+        self.assertTrue(unresolved_procaptcha(snap))
+        self.assertTrue(page_still_challenged(snap))
+
+    def test_solved_token_on_human_check_shell_is_still_unresolved(self) -> None:
+        snap = _shell_snapshot(
+            procaptcha={
+                "present": True,
+                "solved": True,
+                "kind": "solved",
+                "token": "shell-token",
+            }
+        )
+        self.assertTrue(is_human_check_shell(snap))
+        self.assertFalse(pending_procaptcha(snap))
+        self.assertTrue(unresolved_procaptcha(snap))
+
+    def test_destination_page_is_not_a_human_check_shell(self) -> None:
+        snap = _snapshot(
+            href=DEST_HREF,
+            html="<html><body>ok</body></html>",
+            procaptcha={"present": False, "solved": False},
+        )
+        self.assertFalse(is_human_check_shell(snap))
+        self.assertFalse(unresolved_procaptcha(snap))
+        self.assertFalse(page_still_challenged(snap))
+
+    def test_ordinary_bundle_page_clears_once_solved(self) -> None:
+        html = (
+            "<html><body><div class='procaptcha' data-sitekey='test-key'></div>"
+            '<script src="https://js.prosopo.io/js/procaptcha.bundle.js"></script>'
+            "</body></html>"
+        )
+        unsolved = _snapshot(
+            html=html,
+            procaptcha={"present": False, "solved": False},
+        )
+        solved = _snapshot(
+            html=html,
+            procaptcha={
+                "present": True,
+                "solved": True,
+                "kind": "solved",
+                "token": "ordinary-token",
+            },
+        )
+        self.assertFalse(is_human_check_shell(unsolved))
+        self.assertTrue(unresolved_procaptcha(unsolved))
+        self.assertFalse(unresolved_procaptcha(solved))
 
 
 class ProcaptchaClearanceTest(unittest.TestCase):
@@ -275,6 +362,133 @@ class ProcaptchaClearanceTest(unittest.TestCase):
             )
             self.assertFalse(timed_out)
             self.assertEqual(snapshot["href"], "https://example.com/")
+
+        asyncio.run(run())
+
+    def test_human_check_shell_is_not_clearance_while_unmounted(self) -> None:
+        evaluates = {"n": 0}
+
+        async def run() -> None:
+            browser = CdpBrowser(None, None, focus_windows=False)
+
+            async def call(method: str, params=None, session_id=None, timeout: float = 30.0):
+                return {}
+
+            async def evaluate(expression: str, session_id: str):
+                evaluates["n"] += 1
+                return _shell_snapshot()
+
+            browser.call = call  # type: ignore[method-assign]
+            browser.evaluate = evaluate  # type: ignore[method-assign]
+            snapshot, timed_out = await browser._wait_for_page_clearance(
+                "t", "s", timeout=0.3
+            )
+            self.assertTrue(timed_out)
+            self.assertTrue(unresolved_procaptcha(snapshot))
+            self.assertEqual(snapshot["title"], "Confirm you are human")
+
+        asyncio.run(run())
+        self.assertGreater(evaluates["n"], 1)
+
+    def test_human_check_shell_clears_after_navigation(self) -> None:
+        async def run() -> None:
+            browser = CdpBrowser(None, None, focus_windows=False)
+            n = {"i": 0}
+
+            async def call(method: str, params=None, session_id=None, timeout: float = 30.0):
+                return {}
+
+            async def wait_for_event(method: str, session_id=None, timeout: float = 60.0):
+                return {}
+
+            async def evaluate(expression: str, session_id: str):
+                n["i"] += 1
+                if n["i"] < 3:
+                    return _shell_snapshot()
+                return _snapshot(
+                    href=DEST_HREF,
+                    html="<html><body>ok</body></html>",
+                    procaptcha={"present": False, "solved": False},
+                )
+
+            browser.call = call  # type: ignore[method-assign]
+            browser.evaluate = evaluate  # type: ignore[method-assign]
+            browser.wait_for_event = wait_for_event  # type: ignore[method-assign]
+            snapshot, timed_out = await browser._wait_for_page_clearance(
+                "t", "s", timeout=3.0
+            )
+            self.assertFalse(timed_out)
+            self.assertEqual(snapshot["href"], DEST_HREF)
+            self.assertFalse(unresolved_procaptcha(snapshot))
+
+        asyncio.run(run())
+
+    def test_human_check_shell_solved_token_without_navigation_is_not_clearance(
+        self,
+    ) -> None:
+        async def run() -> None:
+            browser = CdpBrowser(None, None, focus_windows=False)
+
+            async def call(method: str, params=None, session_id=None, timeout: float = 30.0):
+                return {}
+
+            async def evaluate(expression: str, session_id: str):
+                return _shell_snapshot(
+                    procaptcha={
+                        "present": True,
+                        "solved": True,
+                        "kind": "solved",
+                        "token": "shell-token",
+                    }
+                )
+
+            browser.call = call  # type: ignore[method-assign]
+            browser.evaluate = evaluate  # type: ignore[method-assign]
+            snapshot, timed_out = await browser._wait_for_page_clearance(
+                "t", "s", timeout=0.3
+            )
+            self.assertTrue(timed_out)
+            self.assertTrue(unresolved_procaptcha(snapshot))
+            self.assertEqual(snapshot["href"], SHELL_HREF)
+
+        asyncio.run(run())
+
+    def test_human_check_shell_clears_when_solved_and_location_left(self) -> None:
+        async def run() -> None:
+            browser = CdpBrowser(None, None, focus_windows=False)
+            n = {"i": 0}
+
+            async def call(method: str, params=None, session_id=None, timeout: float = 30.0):
+                return {}
+
+            async def wait_for_event(method: str, session_id=None, timeout: float = 60.0):
+                return {}
+
+            async def evaluate(expression: str, session_id: str):
+                n["i"] += 1
+                if n["i"] < 3:
+                    return _shell_snapshot()
+                return _snapshot(
+                    href=DEST_HREF,
+                    html="<html><body>ok</body></html>",
+                    procaptcha={
+                        "present": True,
+                        "solved": True,
+                        "kind": "solved",
+                        "token": "nav-token",
+                    },
+                )
+
+            browser.call = call  # type: ignore[method-assign]
+            browser.evaluate = evaluate  # type: ignore[method-assign]
+            browser.wait_for_event = wait_for_event  # type: ignore[method-assign]
+            snapshot, timed_out = await browser._wait_for_page_clearance(
+                "t", "s", timeout=3.0
+            )
+            self.assertFalse(timed_out)
+            self.assertEqual(snapshot["href"], DEST_HREF)
+            self.assertEqual(procaptcha_token(snapshot), "nav-token")
+            self.assertFalse(unresolved_procaptcha(snapshot))
 
         asyncio.run(run())
 

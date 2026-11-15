@@ -23,6 +23,8 @@ from cookie_server.cdp_browser import CdpBrowser, procaptcha_token  # noqa: E402
 from cookie_server.puzzle import (  # noqa: E402
     BOARD_HEIGHT,
     BOARD_WIDTH,
+    SATURATED_LUMA_NCC,
+    WEAK_EDGE_NCC,
     decode_image,
     human_drag_path,
     match_piece,
@@ -234,6 +236,8 @@ class PuzzleMatchTest(unittest.TestCase):
                 puzzle["piece"],
                 puzzle["origin"],
             )
+            self.assertIsNotNone(hit, f"seed={seed} returned no target")
+            assert hit is not None
             err = math.hypot(hit.x - puzzle["target"][0], hit.y - puzzle["target"][1])
             errors.append(err)
             self.assertLessEqual(
@@ -245,6 +249,36 @@ class PuzzleMatchTest(unittest.TestCase):
             )
         self.assertLessEqual(max(errors), 8.0)
         self.assertLess(sum(errors) / len(errors), 2.0)
+
+    def test_match_piece_still_finds_darkened_cut(self) -> None:
+        puzzle = make_synthetic_puzzle(8)
+        hit = match_piece(
+            puzzle["background"],
+            puzzle["piece"],
+            puzzle["origin"],
+        )
+        self.assertIsNotNone(hit)
+        assert hit is not None
+        err = math.hypot(hit.x - puzzle["target"][0], hit.y - puzzle["target"][1])
+        self.assertLessEqual(err, 8.0)
+        self.assertFalse(
+            hit.ncc >= SATURATED_LUMA_NCC and hit.ncc_edge < WEAK_EDGE_NCC
+        )
+
+    def test_flat_piece_does_not_return_saturated_ncc_target(self) -> None:
+        background = np.full((BOARD_HEIGHT, BOARD_WIDTH, 3), 120, dtype=np.uint8)
+        background[30:90, 160:230] = 40
+        piece = np.zeros((48, 48, 4), dtype=np.uint8)
+        piece[:, :, 0:3] = 80
+        piece[:, :, 3] = 255
+        hit = match_piece(background, piece, (50.0, 50.0))
+        self.assertTrue(
+            hit is None
+            or not (hit.ncc >= SATURATED_LUMA_NCC and hit.ncc_edge < WEAK_EDGE_NCC),
+            None
+            if hit is None
+            else f"ncc={hit.ncc:.3f} edge={hit.ncc_edge:.3f} score={hit.score:.3f}",
+        )
 
     def test_decode_roundtrip_preserves_alpha(self) -> None:
         puzzle = make_synthetic_puzzle(1)
@@ -295,6 +329,14 @@ class PuzzleClearanceTest(unittest.TestCase):
         self.assertEqual(calls[2][1]["buttons"], 1)
         self.assertEqual(calls[-1][1]["x"], 40.0)
         self.assertEqual(calls[-1][1]["y"], 30.0)
+        for _method, params in calls:
+            self.assertEqual((params or {}).get("pointerType"), "mouse")
+        move_buttons = [
+            (params or {}).get("buttons")
+            for _method, params in calls[2:-1]
+        ]
+        self.assertTrue(move_buttons)
+        self.assertTrue(all(buttons == 1 for buttons in move_buttons))
 
     def test_clearance_drags_puzzle_then_returns_token(self) -> None:
         puzzle = make_synthetic_puzzle(8)
@@ -385,6 +427,58 @@ class PuzzleClearanceTest(unittest.TestCase):
         asyncio.run(run())
         self.assertNotIn("Input.dispatchMouseEvent", calls)
         self.assertNotIn("Page.reload", calls)
+
+    def test_unmoved_puzzle_drag_is_failure_and_not_retried(self) -> None:
+        puzzle = make_synthetic_puzzle(8)
+        extract = {
+            "ready": True,
+            "originX": puzzle["origin"][0],
+            "originY": puzzle["origin"][1],
+            "pieceSize": puzzle["piece_size"],
+            "board": {"left": 100.0, "top": 80.0, "width": 300.0, "height": 200.0},
+            "pieceRect": {
+                "left": 120.0,
+                "top": 90.0,
+                "width": float(puzzle["piece_size"]),
+                "height": float(puzzle["piece_size"]),
+            },
+            "background": _png_data_uri(puzzle["background"]),
+            "piece": _png_data_uri(puzzle["piece"]),
+        }
+        pressed = {"n": 0}
+
+        async def run() -> None:
+            browser = CdpBrowser(None, None, focus_windows=False)
+
+            async def call(method: str, params=None, session_id=None, timeout: float = 30.0):
+                if method == "Input.dispatchMouseEvent" and (params or {}).get("type") == "mousePressed":
+                    pressed["n"] += 1
+                return {}
+
+            async def evaluate(expression: str, session_id: str):
+                if "toDataURL" in expression:
+                    return extract
+                return _snapshot(
+                    procaptcha={
+                        "present": True,
+                        "solved": False,
+                        "kind": "puzzle",
+                        "originX": puzzle["origin"][0],
+                        "originY": puzzle["origin"][1],
+                        "pieceSize": puzzle["piece_size"],
+                        "board": extract["board"],
+                    }
+                )
+
+            browser.call = call  # type: ignore[method-assign]
+            browser.evaluate = evaluate  # type: ignore[method-assign]
+            _snapshot_out, timed_out = await browser._wait_for_page_clearance(
+                "t", "s", timeout=1.5
+            )
+            self.assertTrue(timed_out)
+
+        asyncio.run(run())
+        self.assertEqual(pressed["n"], 1)
 
 
 if __name__ == "__main__":
