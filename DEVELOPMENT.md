@@ -112,7 +112,7 @@ Spawns iframe solvers that connect to the token server. On a solve request, load
 
 ### 2. Turnstile Clicker
 
-Rust binary that finds Turnstile checkboxes via pixel analysis (grey ring DFS) and clicks at the OS level. **Disabled by default** on bare metal — press **F8** to toggle. In Docker, `CLICKER_ENABLED=1` starts it automatically.
+Rust binary that finds Turnstile checkboxes via pixel analysis (grey ring DFS) and clicks at the OS level. It captures the Xvfb framebuffer with X11 `GetImage` (`xcb`). **Disabled by default** on bare metal — press **F8** to toggle. In Docker, `CLICKER_ENABLED=1` starts it automatically.
 
 ---
 

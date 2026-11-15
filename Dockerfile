@@ -16,10 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxi-dev \
         libxcb1-dev \
         libxrandr-dev \
-        libdbus-1-dev \
         libxdo-dev \
         libxkbcommon-dev \
-        libwayland-dev \
         libudev-dev \
         libinput-dev \
     && rm -rf /var/lib/apt/lists/*

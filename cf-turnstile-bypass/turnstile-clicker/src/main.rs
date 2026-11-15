@@ -10,8 +10,10 @@ use std::{
 
 use enigo::{Button, Coordinate, Enigo, Mouse, Settings};
 use inputbot::KeybdKey;
-use screenshots::Screen;
 use rand::Rng;
+
+mod x11_capture;
+use x11_capture::Screen;
 
 // Some config to aid with detection.
 // Note that though these are decent config values, depending on your specific graphics rendering these could require adjustment.
