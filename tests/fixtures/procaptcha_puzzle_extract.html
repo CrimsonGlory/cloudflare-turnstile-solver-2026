@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>procaptcha-puzzle-extract-fixture</title>
+</head>
+<body style="margin:0;background:#ddd">
+  <div
+    id="board"
+    class="prosopo-puzzle-area"
+    style="position:absolute;left:80px;top:60px;width:300px;height:200px;overflow:hidden;background:#000"
+  ></div>
+  <script>
+    function pngFrom(w, h, paint) {
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      paint(c.getContext("2d"));
+      return c.toDataURL("image/png");
+    }
+    const clean = pngFrom(300, 200, (ctx) => {
+      ctx.fillStyle = "#c82828";
+      ctx.fillRect(0, 0, 150, 100);
+      ctx.fillStyle = "#1ec828";
+      ctx.fillRect(150, 0, 150, 100);
+      ctx.fillStyle = "#2832dc";
+      ctx.fillRect(0, 100, 150, 100);
+      ctx.fillStyle = "#e6dc1e";
+      ctx.fillRect(150, 100, 150, 100);
+    });
+    const mask = pngFrom(60, 40, (ctx) => {
+      ctx.clearRect(0, 0, 60, 40);
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(30, 20, 14, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    const board = document.getElementById("board");
+    function tile(left, top) {
+      const img = document.createElement("img");
+      img.src = clean;
+      img.width = 300;
+      img.height = 200;
+      img.style.cssText =
+        "position:absolute;width:300px;height:200px;left:" +
+        left +
+        "px;top:" +
+        top +
+        "px";
+      board.appendChild(img);
+    }
+    tile(0, 0);
+    tile(300, 200);
+    const overlay = document.createElement("canvas");
+    overlay.width = 300;
+    overlay.height = 200;
+    overlay.style.cssText = "position:absolute;left:0;top:0;pointer-events:none";
+    const octx = overlay.getContext("2d");
+    octx.fillStyle = "rgba(0,0,0,0.55)";
+    octx.fillRect(170, 70, 70, 50);
+    board.appendChild(overlay);
+    const hidden = document.createElement("div");
+    hidden.className = "prosopo-puzzle-piece";
+    hidden.setAttribute("aria-hidden", "true");
+    hidden.style.cssText =
+      "position:absolute;left:16px;top:24px;width:60px;height:40px;opacity:0;pointer-events:none";
+    board.appendChild(hidden);
+    const piece = document.createElement("div");
+    piece.className = "prosopo-puzzle-piece";
+    piece.setAttribute("role", "application");
+    piece.style.cssText =
+      "position:absolute;left:16px;top:24px;width:60px;height:40px;" +
+      "background-image:url(" + clean + ");" +
+      "background-size:300px 200px;" +
+      "background-position:-150px -100px;" +
+      "background-repeat:no-repeat;" +
+      "-webkit-mask-image:url(" + mask + ");" +
+      "mask-image:url(" + mask + ");" +
+      "-webkit-mask-size:60px 40px;" +
+      "mask-size:60px 40px;" +
+      "-webkit-mask-repeat:no-repeat;" +
+      "mask-repeat:no-repeat;";
+    board.appendChild(piece);
+  </script>
+</body>
+</html>

@@ -7,11 +7,19 @@ import asyncio
 import base64
 import io
 import math
+import os
 import random
+import shutil
+import socket
+import subprocess
 import sys
+import tempfile
+import threading
+import time
 import unittest
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 from PIL import Image
@@ -19,16 +27,35 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from cookie_server.cdp_browser import CdpBrowser, procaptcha_token  # noqa: E402
+from cookie_server import cdp_browser as cdp_mod  # noqa: E402
+from cookie_server.cdp_browser import (  # noqa: E402
+    CdpBrowser,
+    _PROSOPO_PUZZLE_EXTRACT_JS,
+    procaptcha_token,
+    wait_for_cdp,
+)
 from cookie_server.puzzle import (  # noqa: E402
     BOARD_HEIGHT,
     BOARD_WIDTH,
     SATURATED_LUMA_NCC,
     WEAK_EDGE_NCC,
+    board_rect_from_state,
+    crop_css_rect,
     decode_image,
     human_drag_path,
     match_piece,
+    rasterize_css_layer,
+    rasterize_piece_spec,
+    scale_to_board,
 )
+
+CHROME_BIN = (
+    os.environ.get("CHROME_BIN")
+    or shutil.which("google-chrome-stable")
+    or shutil.which("google-chrome")
+)
+XVFB_BIN = shutil.which("Xvfb")
+FIXTURE_DIR = ROOT / "tests" / "fixtures"
 
 
 def _png_data_uri(pixels: np.ndarray) -> str:
@@ -36,6 +63,110 @@ def _png_data_uri(pixels: np.ndarray) -> str:
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _png_b64(pixels: np.ndarray) -> str:
+    image = Image.fromarray(pixels)
+    if image.mode != "RGBA":
+        image = image.convert("RGBA")
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _as_rgba(pixels: np.ndarray) -> np.ndarray:
+    if pixels.ndim == 2:
+        return np.stack(
+            [pixels, pixels, pixels, np.full_like(pixels, 255)], axis=-1
+        ).astype(np.uint8)
+    if pixels.shape[2] == 3:
+        alpha = np.full(pixels.shape[:2] + (1,), 255, dtype=np.uint8)
+        return np.concatenate([pixels, alpha], axis=2)
+    return pixels.astype(np.uint8)
+
+
+def _viewport_screenshot(
+    board: np.ndarray,
+    *,
+    left: float = 100.0,
+    top: float = 80.0,
+    canvas: tuple[int, int] = (800, 600),
+    dpr: float = 1.0,
+) -> np.ndarray:
+    rgba = _as_rgba(board)
+    cw, ch = canvas
+    view = np.zeros((int(round(ch * dpr)), int(round(cw * dpr)), 4), dtype=np.uint8)
+    view[:, :, 3] = 255
+    img = Image.fromarray(rgba)
+    scaled = img.resize(
+        (int(round(rgba.shape[1] * dpr)), int(round(rgba.shape[0] * dpr))),
+        Image.Resampling.BILINEAR,
+    )
+    arr = np.array(scaled.convert("RGBA"))
+    x0 = int(round(left * dpr))
+    y0 = int(round(top * dpr))
+    h, w = arr.shape[:2]
+    view[y0 : y0 + h, x0 : x0 + w] = arr
+    return view
+
+
+def make_clean_photo_pair() -> dict[str, Any]:
+    """Smooth photo with no darkened cut: live failure mode (ncc=1, weak edge)."""
+    rng = np.random.default_rng(0)
+    background = np.full((BOARD_HEIGHT, BOARD_WIDTH, 3), 110, dtype=np.float32)
+    yy, xx = np.mgrid[0:BOARD_HEIGHT, 0:BOARD_WIDTH]
+    background[:, :, 0] += 8 * np.sin(xx / 40.0)
+    background[:, :, 1] += 6 * np.cos(yy / 35.0)
+    background[:, :, 2] += 5 * np.sin((xx + yy) / 50.0)
+    background += rng.normal(0, 0.4, background.shape)
+    background = np.clip(background, 0, 255).astype(np.uint8)
+    size = 56
+    origin = (30.0 + size / 2.0, 40.0 + size / 2.0)
+    piece = np.zeros((size, size, 4), dtype=np.uint8)
+    piece[:, :, :3] = background[40 : 40 + size, 30 : 30 + size]
+    piece[:, :, 3] = 255
+    piece[:, :, :3] = np.clip(piece[:, :, :3].astype(np.int16) + 6, 0, 255).astype(
+        np.uint8
+    )
+    return {
+        "background": background,
+        "piece": piece,
+        "origin": origin,
+        "piece_size": size,
+    }
+
+
+def _wire_puzzle_browser(
+    browser: CdpBrowser,
+    *,
+    extract: dict[str, Any],
+    screenshot: np.ndarray,
+    snapshot_fn: Callable[[], dict[str, Any]],
+    calls: list[str] | None = None,
+    on_mouse: Callable[[str, dict | None], None] | None = None,
+) -> None:
+    shot_b64 = _png_b64(screenshot)
+
+    async def call(method: str, params=None, session_id=None, timeout: float = 30.0):
+        if calls is not None:
+            calls.append(method)
+        if on_mouse and method == "Input.dispatchMouseEvent":
+            on_mouse(method, params)
+        if method == "Page.captureScreenshot":
+            return {"data": shot_b64}
+        return {}
+
+    async def evaluate(expression: str, session_id: str):
+        if "devicePixelRatio" in expression:
+            return 1
+        if "procaptchaPuzzleHide" in expression or "procaptchaPuzzleRestore" in expression:
+            return {"ok": True}
+        if "toDataURL" in expression or "procaptchaPuzzleExtract" in expression:
+            return extract
+        return snapshot_fn()
+
+    browser.call = call  # type: ignore[method-assign]
+    browser.evaluate = evaluate  # type: ignore[method-assign]
 
 
 def _rounded_box_distance(px: float, py: float, half: float, radius: float) -> float:
@@ -280,6 +411,31 @@ class PuzzleMatchTest(unittest.TestCase):
             else f"ncc={hit.ncc:.3f} edge={hit.ncc_edge:.3f} score={hit.score:.3f}",
         )
 
+    def test_clean_photo_without_cut_is_rejected(self) -> None:
+        pair = make_clean_photo_pair()
+        hit = match_piece(pair["background"], pair["piece"], pair["origin"])
+        self.assertIsNone(hit)
+
+    def test_painted_board_crop_keeps_overlay_darkening(self) -> None:
+        clean = np.zeros((BOARD_HEIGHT, BOARD_WIDTH, 3), dtype=np.uint8)
+        yy, xx = np.mgrid[0:BOARD_HEIGHT, 0:BOARD_WIDTH]
+        clean[:, :, 0] = (40 + xx * 0.4).astype(np.uint8)
+        clean[:, :, 1] = (80 + yy * 0.3).astype(np.uint8)
+        clean[:, :, 2] = 160
+        painted = clean.copy()
+        painted[70:130, 160:230] = (painted[70:130, 160:230].astype(np.float32) * 0.45).astype(
+            np.uint8
+        )
+        shot = _viewport_screenshot(painted, left=40, top=50, dpr=2.0)
+        crop = crop_css_rect(shot, 40, 50, 300, 200, dpr=2.0)
+        self.assertIsNotNone(crop)
+        assert crop is not None
+        board = scale_to_board(crop)
+        hole = float(board[100, 190, :3].mean())
+        tile = float(clean[100, 190].mean())
+        self.assertLess(hole, tile - 20)
+        self.assertFalse(np.allclose(board[:, :, :3], clean, atol=8))
+
     def test_decode_roundtrip_preserves_alpha(self) -> None:
         puzzle = make_synthetic_puzzle(1)
         uri = _png_data_uri(puzzle["piece"])
@@ -298,6 +454,89 @@ class PuzzleMatchTest(unittest.TestCase):
         )
         straight = math.hypot(200.0, 70.0)
         self.assertGreater(length, straight)
+
+
+class PuzzleRasterizeTest(unittest.TestCase):
+    def test_css_background_crop_is_not_a_squashed_full_image(self) -> None:
+        full = np.zeros((BOARD_HEIGHT, BOARD_WIDTH, 4), dtype=np.uint8)
+        full[:, :, 3] = 255
+        full[0:100, 0:150] = [220, 30, 30, 255]
+        full[0:100, 150:300] = [30, 200, 40, 255]
+        full[100:200, 0:150] = [40, 40, 220, 255]
+        full[100:200, 150:300] = [230, 220, 30, 255]
+        crop = rasterize_css_layer(
+            full,
+            60,
+            40,
+            size="300px 200px",
+            position="-150px -100px",
+            repeat="no-repeat",
+        )
+        # Visible face is the yellow quadrant, not a mix of all four.
+        pixel = crop[20, 30, :3]
+        self.assertGreater(int(pixel[0]), 180)
+        self.assertGreater(int(pixel[1]), 170)
+        self.assertLess(int(pixel[2]), 80)
+        squashed = np.array(
+            Image.fromarray(full).resize((60, 40), Image.Resampling.BILINEAR)
+        )
+        self.assertGreater(
+            abs(int(squashed[20, 30, 0]) - int(pixel[0])),
+            30,
+        )
+
+    def test_css_mask_keeps_transparent_pixels_transparent(self) -> None:
+        full = np.full((BOARD_HEIGHT, BOARD_WIDTH, 4), 180, dtype=np.uint8)
+        full[:, :, 3] = 255
+        mask = np.zeros((40, 60, 4), dtype=np.uint8)
+        yy, xx = np.ogrid[:40, :60]
+        mask[:, :, 3] = np.where((xx - 30) ** 2 + (yy - 20) ** 2 < 12**2, 255, 0)
+        masked = rasterize_css_layer(
+            full,
+            60,
+            40,
+            size="300px 200px",
+            position="0px 0px",
+            repeat="no-repeat",
+            mask_image=mask,
+            mask_size="60px 40px",
+            mask_position="0px 0px",
+            mask_repeat="no-repeat",
+        )
+        self.assertEqual(int(masked[0, 0, 3]), 0)
+        self.assertEqual(int(masked[39, 59, 3]), 0)
+        self.assertGreater(int(masked[20, 30, 3]), 200)
+
+    def test_clip_path_circle_is_applied_as_alpha(self) -> None:
+        full = np.full((80, 80, 4), 200, dtype=np.uint8)
+        full[:, :, 3] = 255
+        clipped = rasterize_css_layer(
+            full,
+            80,
+            80,
+            size="80px 80px",
+            position="0px 0px",
+            clip_path="circle(20px at 50% 50%)",
+        )
+        self.assertEqual(int(clipped[0, 0, 3]), 0)
+        self.assertGreater(int(clipped[40, 40, 3]), 200)
+
+    def test_piece_spec_uses_background_position_crop(self) -> None:
+        full = np.zeros((BOARD_HEIGHT, BOARD_WIDTH, 4), dtype=np.uint8)
+        full[:, :, 3] = 255
+        full[80:120, 150:210] = [12, 240, 18, 255]
+        spec = {
+            "image": _png_data_uri(full),
+            "boxWidth": 60,
+            "boxHeight": 40,
+            "backgroundSize": "300px 200px",
+            "backgroundPosition": "-150px -80px",
+            "backgroundRepeat": "no-repeat",
+        }
+        layer = rasterize_piece_spec(spec)
+        pixel = layer[20, 30, :3]
+        self.assertLess(int(pixel[0]), 40)
+        self.assertGreater(int(pixel[1]), 200)
 
 
 class PuzzleClearanceTest(unittest.TestCase):
@@ -351,19 +590,16 @@ class PuzzleClearanceTest(unittest.TestCase):
         }
         released = {"n": 0}
         calls: list[str] = []
+        screenshot = _viewport_screenshot(puzzle["background"])
 
         async def run() -> None:
             browser = CdpBrowser(None, None, focus_windows=False)
 
-            async def call(method: str, params=None, session_id=None, timeout: float = 30.0):
-                calls.append(method)
-                if method == "Input.dispatchMouseEvent" and (params or {}).get("type") == "mouseReleased":
+            def on_mouse(_method: str, params: dict | None) -> None:
+                if (params or {}).get("type") == "mouseReleased":
                     released["n"] += 1
-                return {}
 
-            async def evaluate(expression: str, session_id: str):
-                if "toDataURL" in expression:
-                    return extract
+            def snapshot_fn() -> dict[str, Any]:
                 if released["n"]:
                     return _snapshot(
                         procaptcha={
@@ -385,8 +621,14 @@ class PuzzleClearanceTest(unittest.TestCase):
                     }
                 )
 
-            browser.call = call  # type: ignore[method-assign]
-            browser.evaluate = evaluate  # type: ignore[method-assign]
+            _wire_puzzle_browser(
+                browser,
+                extract=extract,
+                screenshot=screenshot,
+                snapshot_fn=snapshot_fn,
+                calls=calls,
+                on_mouse=on_mouse,
+            )
             snapshot, timed_out = await browser._wait_for_page_clearance(
                 "t", "s", timeout=8.0
             )
@@ -396,6 +638,7 @@ class PuzzleClearanceTest(unittest.TestCase):
         asyncio.run(run())
         self.assertGreaterEqual(released["n"], 1)
         self.assertGreater(calls.count("Input.dispatchMouseEvent"), 4)
+        self.assertIn("Page.captureScreenshot", calls)
         self.assertNotIn("Page.reload", calls)
 
     def test_unknown_visual_challenge_is_still_unsolved(self) -> None:
@@ -450,14 +693,231 @@ class PuzzleClearanceTest(unittest.TestCase):
         async def run() -> None:
             browser = CdpBrowser(None, None, focus_windows=False)
 
-            async def call(method: str, params=None, session_id=None, timeout: float = 30.0):
-                if method == "Input.dispatchMouseEvent" and (params or {}).get("type") == "mousePressed":
+            def on_mouse(_method: str, params: dict | None) -> None:
+                if (params or {}).get("type") == "mousePressed":
                     pressed["n"] += 1
-                return {}
 
-            async def evaluate(expression: str, session_id: str):
-                if "toDataURL" in expression:
-                    return extract
+            _wire_puzzle_browser(
+                browser,
+                extract=extract,
+                screenshot=_viewport_screenshot(puzzle["background"]),
+                snapshot_fn=lambda: _snapshot(
+                    procaptcha={
+                        "present": True,
+                        "solved": False,
+                        "kind": "puzzle",
+                        "originX": puzzle["origin"][0],
+                        "originY": puzzle["origin"][1],
+                        "pieceSize": puzzle["piece_size"],
+                        "board": extract["board"],
+                    }
+                ),
+                on_mouse=on_mouse,
+            )
+            _snapshot_out, timed_out = await browser._wait_for_page_clearance(
+                "t", "s", timeout=1.5
+            )
+            self.assertTrue(timed_out)
+
+        asyncio.run(run())
+        self.assertEqual(pressed["n"], 1)
+
+    def test_kaleidoscope_tile_src_is_not_fed_to_matcher(self) -> None:
+        puzzle = make_synthetic_puzzle(8)
+        clean = np.zeros_like(puzzle["background"])
+        yy, xx = np.mgrid[0:BOARD_HEIGHT, 0:BOARD_WIDTH]
+        clean[:, :, 0] = (50 + xx * 0.2).astype(np.uint8)
+        clean[:, :, 1] = (90 + yy * 0.15).astype(np.uint8)
+        clean[:, :, 2] = 140
+        extract = {
+            "ready": True,
+            "originX": puzzle["origin"][0],
+            "originY": puzzle["origin"][1],
+            "pieceSize": puzzle["piece_size"],
+            "board": {"left": 100.0, "top": 80.0, "width": 300.0, "height": 200.0},
+            "background": _png_data_uri(clean),
+            "piece": _png_data_uri(puzzle["piece"]),
+        }
+        seen: dict[str, Any] = {}
+        original = cdp_mod.match_piece
+
+        def wrapped(background, piece, origin, **kwargs):
+            seen["bg"] = np.array(background)
+            return original(background, piece, origin, **kwargs)
+
+        cdp_mod.match_piece = wrapped  # type: ignore[assignment]
+        released = {"n": 0}
+        try:
+
+            async def run() -> None:
+                browser = CdpBrowser(None, None, focus_windows=False)
+
+                def on_mouse(_method: str, params: dict | None) -> None:
+                    if (params or {}).get("type") == "mouseReleased":
+                        released["n"] += 1
+
+                def snapshot_fn() -> dict[str, Any]:
+                    if released["n"]:
+                        return _snapshot(
+                            procaptcha={
+                                "present": True,
+                                "solved": True,
+                                "kind": "solved",
+                                "token": "puzzle-token",
+                            }
+                        )
+                    return _snapshot(
+                        procaptcha={
+                            "present": True,
+                            "solved": False,
+                            "kind": "puzzle",
+                            "originX": puzzle["origin"][0],
+                            "originY": puzzle["origin"][1],
+                            "pieceSize": puzzle["piece_size"],
+                            "board": extract["board"],
+                        }
+                    )
+
+                _wire_puzzle_browser(
+                    browser,
+                    extract=extract,
+                    screenshot=_viewport_screenshot(puzzle["background"]),
+                    snapshot_fn=snapshot_fn,
+                    on_mouse=on_mouse,
+                )
+                snapshot, timed_out = await browser._wait_for_page_clearance(
+                    "t", "s", timeout=8.0
+                )
+                self.assertFalse(timed_out)
+                self.assertEqual(procaptcha_token(snapshot), "puzzle-token")
+
+            asyncio.run(run())
+        finally:
+            cdp_mod.match_piece = original  # type: ignore[assignment]
+        self.assertIn("bg", seen)
+        fed = seen["bg"]
+        tx, ty = puzzle["target"]
+        hole = float(fed[int(ty), int(tx), :3].mean())
+        tile = float(clean[int(ty), int(tx)].mean())
+        painted = float(puzzle["background"][int(ty), int(tx)].mean())
+        self.assertLess(hole, tile - 8)
+        self.assertLess(abs(hole - painted), 18)
+
+    def test_same_raster_hash_logs_saturated_line_once(self) -> None:
+        pair = make_clean_photo_pair()
+        extract = {
+            "ready": True,
+            "originX": pair["origin"][0],
+            "originY": pair["origin"][1],
+            "pieceSize": pair["piece_size"],
+            "board": {"left": 100.0, "top": 80.0, "width": 300.0, "height": 200.0},
+            "piece": _png_data_uri(pair["piece"]),
+        }
+        match_calls = {"n": 0}
+        original = cdp_mod.match_piece
+
+        def wrapped(background, piece, origin, **kwargs):
+            match_calls["n"] += 1
+            return original(background, piece, origin, **kwargs)
+
+        cdp_mod.match_piece = wrapped  # type: ignore[assignment]
+        buf = io.StringIO()
+        old_err = sys.stderr
+        sys.stderr = buf
+        try:
+
+            async def run() -> None:
+                browser = CdpBrowser(None, None, focus_windows=False)
+                _wire_puzzle_browser(
+                    browser,
+                    extract=extract,
+                    screenshot=_viewport_screenshot(pair["background"]),
+                    snapshot_fn=lambda: _snapshot(
+                        procaptcha={
+                            "present": True,
+                            "solved": False,
+                            "kind": "puzzle",
+                            "originX": pair["origin"][0],
+                            "originY": pair["origin"][1],
+                            "pieceSize": pair["piece_size"],
+                            "board": extract["board"],
+                        }
+                    ),
+                )
+                _snapshot_out, timed_out = await browser._wait_for_page_clearance(
+                    "t", "s", timeout=2.2
+                )
+                self.assertTrue(timed_out)
+
+            asyncio.run(run())
+        finally:
+            sys.stderr = old_err
+            cdp_mod.match_piece = original  # type: ignore[assignment]
+        log = buf.getvalue()
+        self.assertEqual(log.count("saturated luminance ncc"), 1, log)
+        self.assertEqual(match_calls["n"], 1)
+        self.assertIn("hash=", log)
+        self.assertIn("template_sq=", log)
+        self.assertIn("opaque=", log)
+
+    def test_flat_candidate_tries_the_next_visible_piece(self) -> None:
+        puzzle = make_synthetic_puzzle(8)
+        flat = np.zeros((48, 48, 4), dtype=np.uint8)
+        flat[:, :, :3] = 80
+        flat[:, :, 3] = 255
+        extract = {
+            "ready": True,
+            "originX": puzzle["origin"][0],
+            "originY": puzzle["origin"][1],
+            "pieceSize": puzzle["piece_size"],
+            "board": {"left": 100.0, "top": 80.0, "width": 300.0, "height": 200.0},
+            "piece": _png_data_uri(flat),
+            "pieces": [
+                {
+                    "originX": puzzle["origin"][0],
+                    "originY": puzzle["origin"][1],
+                    "pieceSize": 48,
+                    "piece": _png_data_uri(flat),
+                    "pieceRect": {
+                        "left": 120.0,
+                        "top": 90.0,
+                        "width": 48.0,
+                        "height": 48.0,
+                    },
+                },
+                {
+                    "originX": puzzle["origin"][0],
+                    "originY": puzzle["origin"][1],
+                    "pieceSize": puzzle["piece_size"],
+                    "piece": _png_data_uri(puzzle["piece"]),
+                    "pieceRect": {
+                        "left": 120.0,
+                        "top": 90.0,
+                        "width": float(puzzle["piece_size"]),
+                        "height": float(puzzle["piece_size"]),
+                    },
+                },
+            ],
+        }
+        released = {"n": 0}
+
+        async def run() -> None:
+            browser = CdpBrowser(None, None, focus_windows=False)
+
+            def on_mouse(_method: str, params: dict | None) -> None:
+                if (params or {}).get("type") == "mouseReleased":
+                    released["n"] += 1
+
+            def snapshot_fn() -> dict[str, Any]:
+                if released["n"]:
+                    return _snapshot(
+                        procaptcha={
+                            "present": True,
+                            "solved": True,
+                            "kind": "solved",
+                            "token": "puzzle-token",
+                        }
+                    )
                 return _snapshot(
                     procaptcha={
                         "present": True,
@@ -470,15 +930,181 @@ class PuzzleClearanceTest(unittest.TestCase):
                     }
                 )
 
-            browser.call = call  # type: ignore[method-assign]
-            browser.evaluate = evaluate  # type: ignore[method-assign]
-            _snapshot_out, timed_out = await browser._wait_for_page_clearance(
-                "t", "s", timeout=1.5
+            _wire_puzzle_browser(
+                browser,
+                extract=extract,
+                screenshot=_viewport_screenshot(puzzle["background"]),
+                snapshot_fn=snapshot_fn,
+                on_mouse=on_mouse,
             )
-            self.assertTrue(timed_out)
+            snapshot, timed_out = await browser._wait_for_page_clearance(
+                "t", "s", timeout=8.0
+            )
+            self.assertFalse(timed_out)
+            self.assertEqual(procaptcha_token(snapshot), "puzzle-token")
 
         asyncio.run(run())
-        self.assertEqual(pressed["n"], 1)
+        self.assertGreaterEqual(released["n"], 1)
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+class _FixtureHandler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(FIXTURE_DIR), **kwargs)
+
+    def log_message(self, fmt: str, *args) -> None:
+        return
+
+
+@unittest.skipUnless(CHROME_BIN and XVFB_BIN, "headed Chrome + Xvfb required")
+class PuzzleExtractLiveTest(unittest.TestCase):
+    def test_extract_uses_painted_board_and_css_crop(self) -> None:
+        record = asyncio.run(self._run())
+        self.assertTrue(record["ready"], record)
+        self.assertGreater(record["overlay_drop"], 20, record)
+        self.assertGreater(record["piece_g"], 150, record)
+        self.assertLess(record["piece_b"], 90, record)
+        self.assertEqual(record["corner_alpha"], 0, record)
+        self.assertGreater(record["center_alpha"], 200, record)
+        self.assertFalse(record["used_tile_src"], record)
+
+    async def _run(self) -> dict[str, Any]:
+        display = os.environ.get("PROSOPO_PUZZLE_DISPLAY", ":98")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), _FixtureHandler)
+        httpd.daemon_threads = True
+        http_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        http_thread.start()
+        fixture_url = f"http://127.0.0.1:{httpd.server_address[1]}/procaptcha_puzzle_extract.html"
+        xvfb = subprocess.Popen(
+            [
+                XVFB_BIN,
+                display,
+                "-screen",
+                "0",
+                "1280x720x24",
+                "-ac",
+                "+extension",
+                "RANDR",
+                "-nolisten",
+                "tcp",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        chrome: subprocess.Popen | None = None
+        browser: CdpBrowser | None = None
+        tmp = tempfile.TemporaryDirectory(prefix="procaptcha-puzzle-")
+        try:
+            self._wait_display(display)
+            env = os.environ.copy()
+            env["DISPLAY"] = display
+            env["HOME"] = tmp.name
+            port = _free_port()
+            profile = Path(tmp.name) / "chrome"
+            profile.mkdir()
+            chrome = subprocess.Popen(
+                [
+                    CHROME_BIN,
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--remote-debugging-address=127.0.0.1",
+                    f"--remote-debugging-port={port}",
+                    "--remote-allow-origins=*",
+                    f"--user-data-dir={profile}",
+                    "--window-size=900,700",
+                    "about:blank",
+                ],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            await wait_for_cdp(f"http://127.0.0.1:{port}", timeout=20.0)
+            browser = await CdpBrowser.connect(
+                f"http://127.0.0.1:{port}",
+                focus_windows=False,
+            )
+            created = await browser.call("Target.createTarget", {"url": "about:blank"})
+            session = (
+                await browser.call(
+                    "Target.attachToTarget",
+                    {"targetId": created["targetId"], "flatten": True},
+                )
+            )["sessionId"]
+            await browser.call("Page.enable", session_id=session)
+            await browser.call("Runtime.enable", session_id=session)
+            nav = await browser.call(
+                "Page.navigate",
+                {"url": fixture_url},
+                session_id=session,
+                timeout=15.0,
+            )
+            if nav.get("errorText"):
+                raise RuntimeError(nav["errorText"])
+            try:
+                await browser.wait_for_event(
+                    "Page.loadEventFired", session_id=session, timeout=15.0
+                )
+            except TimeoutError:
+                pass
+            await asyncio.sleep(0.3)
+            extracted = await browser.evaluate(_PROSOPO_PUZZLE_EXTRACT_JS, session)
+            board = board_rect_from_state(extracted or {})
+            painted = await browser._capture_painted_board(session, board)
+            piece = decode_image(str((extracted or {}).get("piece") or ""))
+            tile_luma = (200 + 40 + 30) / 3.0
+            hole = float(np.mean(painted[95, 200, :3])) if painted is not None else 255.0
+            corner_alpha = int(piece[0, 0, 3])
+            center_alpha = int(piece[20, 30, 3])
+            pixel = piece[20, 30, :3]
+            return {
+                "ready": bool(isinstance(extracted, dict) and extracted.get("ready")),
+                "overlay_drop": tile_luma - hole,
+                "piece_g": int(pixel[1]),
+                "piece_b": int(pixel[2]),
+                "corner_alpha": corner_alpha,
+                "center_alpha": center_alpha,
+                "used_tile_src": "background" in (extracted or {}),
+                "piece_shape": list(piece.shape),
+            }
+        finally:
+            if browser:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+            if chrome:
+                chrome.terminate()
+            xvfb.terminate()
+            for proc in [p for p in (chrome, xvfb) if p is not None]:
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    proc.kill()
+            httpd.shutdown()
+            httpd.server_close()
+            tmp.cleanup()
+
+    def _wait_display(self, display: str, timeout: float = 5.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            probe = subprocess.run(
+                ["xdpyinfo", "-display", display],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if probe.returncode == 0:
+                return
+            time.sleep(0.1)
+        time.sleep(0.4)
 
 
 if __name__ == "__main__":

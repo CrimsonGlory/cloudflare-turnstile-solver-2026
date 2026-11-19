@@ -17,18 +17,28 @@ from cookie_server.ws import ws_close, ws_connect, ws_mask, ws_recv
 
 try:
     from cookie_server.puzzle import (
+        FLAT_TEMPLATE_SQ,
         board_rect_from_state,
         decode_image,
         human_drag_path,
         match_piece,
+        piece_template_stats,
+        raster_digest,
+        rasterize_piece_spec,
+        scale_to_board,
     )
 
     _PUZZLE_MATCH_AVAILABLE = True
 except ImportError:  # numpy / Pillow missing from the image
+    FLAT_TEMPLATE_SQ = 1e-3  # type: ignore[assignment]
     board_rect_from_state = None  # type: ignore[assignment]
     decode_image = None  # type: ignore[assignment]
     human_drag_path = None  # type: ignore[assignment]
     match_piece = None  # type: ignore[assignment]
+    piece_template_stats = None  # type: ignore[assignment]
+    raster_digest = None  # type: ignore[assignment]
+    rasterize_piece_spec = None  # type: ignore[assignment]
+    scale_to_board = None  # type: ignore[assignment]
     _PUZZLE_MATCH_AVAILABLE = False
 
 try:
@@ -305,6 +315,7 @@ _PROSOPO_EXECUTE_JS = """(() => {
 })()"""
 
 _PROSOPO_PUZZLE_EXTRACT_JS = """(async () => {
+  /* procaptchaPuzzleExtract */
   function walkShadows(root, visit) {
     if (!root) return null;
     var hit = visit(root);
@@ -328,23 +339,194 @@ _PROSOPO_PUZZLE_EXTRACT_JS = """(async () => {
     if (!match) return '';
     return String(match[2] || '').replace(/^['\"]|['\"]$/g, '');
   }
-  async function rasterize(src, width, height) {
-    if (!src) return '';
+  function parseLen(token, ref) {
+    var s = String(token || '').trim();
+    if (!s) return 0;
+    if (s.charAt(s.length - 1) === '%') return parseFloat(s) / 100 * ref;
+    return parseFloat(s);
+  }
+  function parseBgSize(value, nw, nh, boxW, boxH) {
+    var v = String(value || 'auto').trim().toLowerCase();
+    if (v === 'cover') {
+      var sc = Math.max(boxW / nw, boxH / nh);
+      return { w: nw * sc, h: nh * sc };
+    }
+    if (v === 'contain') {
+      var sc2 = Math.min(boxW / nw, boxH / nh);
+      return { w: nw * sc2, h: nh * sc2 };
+    }
+    var parts = v.split(/\\s+/);
+    if (!parts.length || (parts.length === 1 && parts[0] === 'auto')) {
+      return { w: nw, h: nh };
+    }
+    if (parts.length === 1) {
+      var w = parseLen(parts[0], boxW);
+      return { w: w, h: w * nh / nw };
+    }
+    var pw = parts[0], ph = parts[1];
+    if (pw === 'auto' && ph === 'auto') return { w: nw, h: nh };
+    if (pw === 'auto') {
+      var h = parseLen(ph, boxH);
+      return { w: h * nw / nh, h: h };
+    }
+    if (ph === 'auto') {
+      var w2 = parseLen(pw, boxW);
+      return { w: w2, h: w2 * nh / nw };
+    }
+    return { w: parseLen(pw, boxW), h: parseLen(ph, boxH) };
+  }
+  function parseBgPos(value, sizeW, sizeH, boxW, boxH) {
+    var keywords = { left: '0%', top: '0%', right: '100%', bottom: '100%', center: '50%' };
+    var raw = String(value || '0px 0px').trim().toLowerCase().split(/\\s+/);
+    var tokens = [];
+    for (var i = 0; i < raw.length; i++) {
+      if (keywords[raw[i]]) tokens.push(keywords[raw[i]]);
+      else tokens.push(raw[i]);
+    }
+    if (!tokens.length) tokens = ['0px', '0px'];
+    if (tokens.length === 1) tokens = [tokens[0], '50%'];
+    function axis(token, size, box) {
+      if (String(token).charAt(String(token).length - 1) === '%') {
+        return (box - size) * parseFloat(token) / 100;
+      }
+      return parseLen(token, box);
+    }
+    return { x: axis(tokens[0], sizeW, boxW), y: axis(tokens[1], sizeH, boxH) };
+  }
+  function paintCssImage(ctx, img, sizeStr, posStr, repeatStr, boxW, boxH) {
+    var nw = img.naturalWidth || img.width;
+    var nh = img.naturalHeight || img.height;
+    if (!nw || !nh) return;
+    var sz = parseBgSize(sizeStr, nw, nh, boxW, boxH);
+    var pos = parseBgPos(posStr, sz.w, sz.h, boxW, boxH);
+    var repeat = String(repeatStr || 'no-repeat').split(/\\s+/)[0];
+    function drawAt(x, y) {
+      ctx.drawImage(img, 0, 0, nw, nh, x, y, sz.w, sz.h);
+    }
+    if (repeat !== 'repeat' && repeat !== 'repeat-x' && repeat !== 'repeat-y') {
+      drawAt(pos.x, pos.y);
+      return;
+    }
+    var doX = repeat === 'repeat' || repeat === 'repeat-x';
+    var doY = repeat === 'repeat' || repeat === 'repeat-y';
+    var startX = doX ? (pos.x % sz.w) : pos.x;
+    if (doX && startX > 0) startX -= sz.w;
+    var startY = doY ? (pos.y % sz.h) : pos.y;
+    if (doY && startY > 0) startY -= sz.h;
+    for (var y = startY; y < (doY ? boxH : startY + 1); y += sz.h) {
+      for (var x = startX; x < (doX ? boxW : startX + 1); x += sz.w) {
+        drawAt(x, y);
+        if (!doX) break;
+      }
+      if (!doY) break;
+    }
+  }
+  function applyClipPath(ctx, clip, w, h) {
+    if (!clip || clip === 'none') return;
+    var path = null;
+    var rawClip = String(clip);
+    var pathMatch = rawClip.match(/^path\\(\\s*(?:evenodd|nonzero)\\s*,\\s*(['\"]?)([\\s\\S]*)\\1\\s*\\)$/i)
+      || rawClip.match(/^path\\((['\"]?)([\\s\\S]*)\\1\\)$/);
+    if (pathMatch) {
+      try { path = new Path2D(pathMatch[2]); } catch (e) { path = null; }
+    }
+    var poly = String(clip).match(/^polygon\\(([\\s\\S]*)\\)$/);
+    if (!path && poly) {
+      path = new Path2D();
+      var pts = poly[1].split(',');
+      for (var i = 0; i < pts.length; i++) {
+        var xy = pts[i].trim().split(/\\s+/);
+        if (xy.length < 2) continue;
+        var x = parseLen(xy[0], w), y = parseLen(xy[1], h);
+        if (i === 0) path.moveTo(x, y); else path.lineTo(x, y);
+      }
+      path.closePath();
+    }
+    var circle = String(clip).match(/^circle\\(\\s*([^ ]+)\\s*(?:at\\s+([^ ]+)\\s+([^ )]+))?\\s*\\)$/);
+    if (!path && circle) {
+      path = new Path2D();
+      var r = parseLen(circle[1], Math.min(w, h));
+      var cx = parseLen(circle[2] || '50%', w);
+      var cy = parseLen(circle[3] || '50%', h);
+      path.arc(cx, cy, r, 0, Math.PI * 2);
+    }
+    if (!path) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.fillStyle = '#fff';
+    ctx.fill(path);
+    ctx.restore();
+  }
+  async function loadImage(src) {
+    if (!src) return null;
     var img = new Image();
     img.src = src;
     await img.decode();
-    var w = width || img.naturalWidth || img.width;
-    var h = height || img.naturalHeight || img.height;
-    if (!w || !h) return '';
+    return img;
+  }
+  async function imageToDataURL(src) {
+    if (!src) return '';
+    if (String(src).indexOf('data:') === 0) return src;
+    var img = await loadImage(src);
+    if (!img) return '';
+    var c = document.createElement('canvas');
+    c.width = img.naturalWidth || img.width;
+    c.height = img.naturalHeight || img.height;
+    c.getContext('2d').drawImage(img, 0, 0);
+    return c.toDataURL('image/png');
+  }
+  async function rasterizePiece(el) {
+    var cs = getComputedStyle(el);
+    var box = el.getBoundingClientRect();
+    var w = Math.max(1, Math.round(el.offsetWidth || box.width));
+    var h = Math.max(1, Math.round(el.offsetHeight || box.height));
+    var src = cssUrl(cs.backgroundImage);
+    if (!src) return '';
+    var img = await loadImage(src);
     var canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
     var ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, w, h);
-    ctx.drawImage(img, 0, 0, w, h);
-    return canvas.toDataURL('image/png');
+    paintCssImage(ctx, img, cs.backgroundSize, cs.backgroundPosition, cs.backgroundRepeat, w, h);
+    var maskSrc = cssUrl(cs.webkitMaskImage || cs.maskImage);
+    if (maskSrc) {
+      var maskImg = await loadImage(maskSrc);
+      var mc = document.createElement('canvas');
+      mc.width = w;
+      mc.height = h;
+      var mctx = mc.getContext('2d');
+      paintCssImage(
+        mctx,
+        maskImg,
+        cs.webkitMaskSize || cs.maskSize || 'auto',
+        cs.webkitMaskPosition || cs.maskPosition || '0px 0px',
+        cs.webkitMaskRepeat || cs.maskRepeat || 'no-repeat',
+        w,
+        h
+      );
+      ctx.globalCompositeOperation = 'destination-in';
+      ctx.drawImage(mc, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    applyClipPath(ctx, cs.clipPath, w, h);
+    return {
+      piece: canvas.toDataURL('image/png'),
+      image: await imageToDataURL(src),
+      boxWidth: w,
+      boxHeight: h,
+      backgroundSize: cs.backgroundSize,
+      backgroundPosition: cs.backgroundPosition,
+      backgroundRepeat: cs.backgroundRepeat,
+      maskImage: maskSrc ? await imageToDataURL(maskSrc) : '',
+      maskSize: cs.webkitMaskSize || cs.maskSize || '',
+      maskPosition: cs.webkitMaskPosition || cs.maskPosition || '',
+      maskRepeat: cs.webkitMaskRepeat || cs.maskRepeat || '',
+      clipPath: cs.clipPath || 'none'
+    };
   }
-  var piece = walkShadows(document, function (scope) {
+  var found = [];
+  walkShadows(document, function (scope) {
     var nodes = scope.querySelectorAll('.prosopo-puzzle-piece');
     for (var p = 0; p < nodes.length; p++) {
       var el = nodes[p];
@@ -352,71 +534,127 @@ _PROSOPO_PUZZLE_EXTRACT_JS = """(async () => {
       if (el.getAttribute('aria-hidden') === 'true') continue;
       if (cs.opacity === '0' || cs.pointerEvents === 'none') continue;
       var bg = cs.backgroundImage || '';
-      if (bg && bg !== 'none') return el;
+      if (bg && bg !== 'none') found.push(el);
     }
     return null;
   });
-  if (!piece) return { ready: false, reason: 'no_piece' };
-  var area = piece.parentElement;
+  if (!found.length) return { ready: false, reason: 'no_piece' };
+  var area = found[0].parentElement;
   if (!area) return { ready: false, reason: 'no_board' };
   var boardRect = area.getBoundingClientRect();
-  var pieceRect = piece.getBoundingClientRect();
   if (boardRect.width < 40 || boardRect.height < 40) {
     return { ready: false, reason: 'board_size' };
   }
-  var backgroundSrc = '';
-  var tiles = area.querySelectorAll('img');
-  for (var i = 0; i < tiles.length; i++) {
-    var tile = tiles[i];
-    if (tile && tile.src) {
-      // Centre kaleidoscope tile is at local (300, 200); any tile's src
-      // is the same data URI, so the first non-empty src is enough.
-      backgroundSrc = tile.src;
-      if (Math.abs((parseFloat(tile.style.left) || 0) - 300) < 1 &&
-          Math.abs((parseFloat(tile.style.top) || 0) - 200) < 1) {
-        break;
-      }
+  var pieces = [];
+  for (var i = 0; i < found.length; i++) {
+    var el = found[i];
+    var pieceRect = el.getBoundingClientRect();
+    var pieceSize = el.offsetWidth || pieceRect.width;
+    var raster;
+    try {
+      raster = await rasterizePiece(el);
+    } catch (err) {
+      continue;
     }
+    if (!raster || !raster.piece) continue;
+    pieces.push({
+      originX: (el.offsetLeft || 0) + pieceSize / 2,
+      originY: (el.offsetTop || 0) + (el.offsetHeight || pieceRect.height) / 2,
+      pieceSize: pieceSize,
+      pieceRect: {
+        left: pieceRect.left,
+        top: pieceRect.top,
+        width: pieceRect.width,
+        height: pieceRect.height
+      },
+      piece: raster.piece,
+      image: raster.image,
+      boxWidth: raster.boxWidth,
+      boxHeight: raster.boxHeight,
+      backgroundSize: raster.backgroundSize,
+      backgroundPosition: raster.backgroundPosition,
+      backgroundRepeat: raster.backgroundRepeat,
+      maskImage: raster.maskImage,
+      maskSize: raster.maskSize,
+      maskPosition: raster.maskPosition,
+      maskRepeat: raster.maskRepeat,
+      clipPath: raster.clipPath
+    });
   }
-  if (!backgroundSrc) {
-    backgroundSrc = cssUrl(getComputedStyle(area).backgroundImage);
-  }
-  var pieceSrc = cssUrl(getComputedStyle(piece).backgroundImage);
-  if (!backgroundSrc || !pieceSrc) {
-    return { ready: false, reason: 'missing_src' };
-  }
-  var pieceSize = piece.offsetWidth || pieceRect.width;
-  var background;
-  var overlay;
-  try {
-    background = await rasterize(backgroundSrc, 300, 200);
-    overlay = await rasterize(pieceSrc, Math.round(pieceSize), Math.round(piece.offsetHeight || pieceSize));
-  } catch (err) {
-    return { ready: false, reason: 'decode', error: String(err) };
-  }
-  if (!background || !overlay) {
-    return { ready: false, reason: 'empty_raster' };
-  }
+  if (!pieces.length) return { ready: false, reason: 'empty_raster' };
+  var primary = pieces[0];
   return {
     ready: true,
-    originX: (piece.offsetLeft || 0) + pieceSize / 2,
-    originY: (piece.offsetTop || 0) + (piece.offsetHeight || pieceRect.height) / 2,
-    pieceSize: pieceSize,
+    originX: primary.originX,
+    originY: primary.originY,
+    pieceSize: primary.pieceSize,
     board: {
       left: boardRect.left,
       top: boardRect.top,
       width: boardRect.width,
       height: boardRect.height
     },
-    pieceRect: {
-      left: pieceRect.left,
-      top: pieceRect.top,
-      width: pieceRect.width,
-      height: pieceRect.height
-    },
-    background: background,
-    piece: overlay
+    pieceRect: primary.pieceRect,
+    piece: primary.piece,
+    pieces: pieces
   };
+})()"""
+
+# Hide every puzzle overlay for one screenshot of the painted board.
+_PROSOPO_PUZZLE_HIDE_JS = """(() => {
+  /* procaptchaPuzzleHide */
+  function walkShadows(root, visit) {
+    if (!root) return null;
+    visit(root);
+    if (root.shadowRoot) walkShadows(root.shadowRoot, visit);
+    var nodes = root.querySelectorAll('*');
+    for (var n = 0; n < nodes.length; n++) {
+      if (nodes[n].shadowRoot) walkShadows(nodes[n].shadowRoot, visit);
+    }
+    return null;
+  }
+  var hidden = 0;
+  walkShadows(document, function (scope) {
+    var nodes = scope.querySelectorAll('.prosopo-puzzle-piece');
+    for (var p = 0; p < nodes.length; p++) {
+      var el = nodes[p];
+      if (el.getAttribute('data-solver-hide') === '1') continue;
+      el.setAttribute('data-solver-hide', '1');
+      el.setAttribute('data-solver-vis', el.style.visibility || '');
+      el.style.visibility = 'hidden';
+      hidden++;
+    }
+  });
+  return { hidden: hidden };
+})()"""
+
+_PROSOPO_PUZZLE_RESTORE_JS = """(() => {
+  /* procaptchaPuzzleRestore */
+  function walkShadows(root, visit) {
+    if (!root) return null;
+    visit(root);
+    if (root.shadowRoot) walkShadows(root.shadowRoot, visit);
+    var nodes = root.querySelectorAll('*');
+    for (var n = 0; n < nodes.length; n++) {
+      if (nodes[n].shadowRoot) walkShadows(nodes[n].shadowRoot, visit);
+    }
+    return null;
+  }
+  var restored = 0;
+  walkShadows(document, function (scope) {
+    var nodes = scope.querySelectorAll('.prosopo-puzzle-piece');
+    for (var p = 0; p < nodes.length; p++) {
+      var el = nodes[p];
+      if (el.getAttribute('data-solver-hide') !== '1') continue;
+      var prev = el.getAttribute('data-solver-vis');
+      el.removeAttribute('data-solver-hide');
+      el.removeAttribute('data-solver-vis');
+      if (prev) el.style.visibility = prev;
+      else el.style.removeProperty('visibility');
+      restored++;
+    }
+  });
+  return { restored: restored };
 })()"""
 
 # Hidden aria-hidden clones sit in the same box as the visible piece and can
@@ -1326,11 +1564,94 @@ class CdpBrowser:
         )
         return True
 
+    async def _capture_painted_board(
+        self,
+        session_id: str,
+        board: Any,
+    ) -> Any:
+        """Screenshot the board with overlays hidden, scaled to 300x200."""
+        if board is None or scale_to_board is None:
+            return None
+        try:
+            dpr = float(
+                await self.evaluate("window.devicePixelRatio || 1", session_id) or 1
+            )
+        except Exception:
+            dpr = 1.0
+        try:
+            await self.evaluate(_PROSOPO_PUZZLE_HIDE_JS, session_id)
+            screenshot = await self._screenshot_png(session_id)
+        finally:
+            try:
+                await self.evaluate(_PROSOPO_PUZZLE_RESTORE_JS, session_id)
+            except Exception:
+                pass
+        crop = self._crop_tile(
+            screenshot,
+            {
+                "x": board.left,
+                "y": board.top,
+                "width": board.width,
+                "height": board.height,
+            },
+            dpr,
+        )
+        if crop is None:
+            return None
+        return scale_to_board(crop)
+
+    def _puzzle_piece_candidates(self, extracted: dict[str, Any]) -> list[dict[str, Any]]:
+        raw = extracted.get("pieces")
+        if isinstance(raw, list) and raw:
+            return [item for item in raw if isinstance(item, dict)]
+        if extracted.get("piece") or extracted.get("image"):
+            return [extracted]
+        return []
+
+    def _rasterize_puzzle_piece(self, spec: dict[str, Any]) -> Any:
+        if rasterize_piece_spec is None or decode_image is None:
+            return None
+        try:
+            if spec.get("piece"):
+                return decode_image(str(spec.get("piece") or ""))
+            return rasterize_piece_spec(spec)
+        except Exception:
+            try:
+                return rasterize_piece_spec(spec)
+            except Exception:
+                return None
+
+    def _log_puzzle_reject(
+        self,
+        info: dict[str, Any],
+        digest: str,
+        *,
+        extra: str = "",
+    ) -> None:
+        reason = str(info.get("reason") or extra or "no_target")
+        if reason == "flat":
+            prefix = "[puzzle] piece interior has no luminance variance; no target"
+        elif reason == "saturated":
+            prefix = "[puzzle] saturated luminance ncc with weak edges; no target"
+        else:
+            prefix = "[puzzle] match has no target"
+        sys.stderr.write(
+            f"{prefix} (ncc={float(info.get('ncc') or 0):.3f} "
+            f"edge={float(info.get('ncc_edge') or 0):.3f} "
+            f"piece={int(info.get('piece_width') or 0)}x{int(info.get('piece_height') or 0)} "
+            f"opaque={int(info.get('opaque') or 0)} "
+            f"template_sq={float(info.get('template_sq') or 0):.4g} "
+            f"background={int(info.get('background_width') or 0)}x"
+            f"{int(info.get('background_height') or 0)} "
+            f"hash={digest})\n"
+        )
+
     async def _solve_procaptcha_puzzle(
         self,
         session_id: str,
         state: dict[str, Any] | None = None,
         tried: set[tuple[int, int, int, int]] | None = None,
+        skip: dict[str, Any] | None = None,
     ) -> tuple[float, float] | None:
         if not _PUZZLE_MATCH_AVAILABLE:
             return None
@@ -1351,37 +1672,6 @@ class CdpBrowser:
                 f"[cdp_browser] procaptcha puzzle images not ready ({reason})\n"
             )
             return None
-        try:
-            background = decode_image(str(extracted.get("background") or ""))
-            piece = decode_image(str(extracted.get("piece") or ""))
-            origin = (
-                float(extracted.get("originX")),
-                float(extracted.get("originY")),
-            )
-        except Exception as exc:
-            sys.stderr.write(
-                f"[cdp_browser] procaptcha puzzle decode failed: {exc}\n"
-            )
-            return None
-        try:
-            match = match_piece(background, piece, origin)
-        except Exception as exc:
-            sys.stderr.write(
-                f"[cdp_browser] procaptcha puzzle match failed: {exc}\n"
-            )
-            return None
-        if match is None:
-            sys.stderr.write(
-                "[cdp_browser] procaptcha puzzle match has no target "
-                "(flat piece interior or saturated ncc with weak edges)\n"
-            )
-            return None
-        if match.ncc >= 0.999 and match.ncc_edge < 0.25:
-            sys.stderr.write(
-                "[cdp_browser] procaptcha puzzle match rejected "
-                f"ncc={match.ncc:.3f} edge={match.ncc_edge:.3f}; re-extracting\n"
-            )
-            return None
         board = board_rect_from_state(extracted) or board_rect_from_state(state or {})
         if board is None:
             sys.stderr.write("[cdp_browser] procaptcha puzzle has no board rect\n")
@@ -1396,6 +1686,116 @@ class CdpBrowser:
                 f"({board.width:.1f}x{board.height:.1f})\n"
             )
             return None
+        background = await self._capture_painted_board(session_id, board)
+        if background is None:
+            sys.stderr.write(
+                "[cdp_browser] procaptcha puzzle painted board capture failed\n"
+            )
+            return None
+        candidates = self._puzzle_piece_candidates(extracted)
+        chosen: dict[str, Any] | None = None
+        piece = None
+        stats: dict[str, Any] = {}
+        flat_seen = 0
+        for spec in candidates[:2]:
+            raster = self._rasterize_puzzle_piece(spec)
+            if raster is None:
+                continue
+            try:
+                stats = piece_template_stats(raster) if piece_template_stats else {}
+            except RuntimeError:
+                flat_seen += 1
+                chosen = spec
+                piece = raster
+                continue
+            except Exception as exc:
+                sys.stderr.write(
+                    f"[cdp_browser] procaptcha puzzle decode failed: {exc}\n"
+                )
+                return None
+            if float(stats.get("template_sq") or 0) < float(FLAT_TEMPLATE_SQ):
+                flat_seen += 1
+                chosen = spec
+                piece = raster
+                continue
+            chosen = spec
+            piece = raster
+            break
+        if piece is None or chosen is None:
+            sys.stderr.write(
+                "[cdp_browser] procaptcha puzzle decode failed: no piece raster\n"
+            )
+            return None
+        try:
+            origin = (
+                float(chosen.get("originX", extracted.get("originX"))),
+                float(chosen.get("originY", extracted.get("originY"))),
+            )
+        except (TypeError, ValueError) as exc:
+            sys.stderr.write(
+                f"[cdp_browser] procaptcha puzzle decode failed: {exc}\n"
+            )
+            return None
+        digest = raster_digest(background, piece) if raster_digest else ""
+        puzzle_key = (
+            int(round(origin[0])),
+            int(round(origin[1])),
+            int(round(float(chosen.get("pieceSize") or extracted.get("pieceSize") or 0))),
+        )
+        if (
+            skip
+            and skip.get("hash") == digest
+            and skip.get("key") == puzzle_key
+        ):
+            return None
+
+        def remember_raster() -> None:
+            if skip is not None:
+                skip["hash"] = digest
+                skip["key"] = puzzle_key
+
+        if flat_seen and float(stats.get("template_sq") or 0) < float(FLAT_TEMPLATE_SQ):
+            info = {
+                "reason": "flat",
+                "template_sq": stats.get("template_sq") or 0,
+                "opaque": stats.get("opaque") or 0,
+                "piece_width": stats.get("width") or piece.shape[1],
+                "piece_height": stats.get("height") or piece.shape[0],
+                "background_width": background.shape[1],
+                "background_height": background.shape[0],
+                "ncc": 0.0,
+                "ncc_edge": 0.0,
+            }
+            self._log_puzzle_reject(info, digest)
+            remember_raster()
+            return None
+        info: dict[str, Any] = {}
+        try:
+            match = match_piece(background, piece, origin, info=info, log=False)
+        except Exception as exc:
+            sys.stderr.write(
+                f"[cdp_browser] procaptcha puzzle match failed: {exc}\n"
+            )
+            return None
+        remember_raster()
+        if match is None:
+            if not info:
+                info = {
+                    "template_sq": stats.get("template_sq") or 0,
+                    "opaque": stats.get("opaque") or 0,
+                    "piece_width": piece.shape[1],
+                    "piece_height": piece.shape[0],
+                    "background_width": background.shape[1],
+                    "background_height": background.shape[0],
+                }
+            self._log_puzzle_reject(info, digest)
+            return None
+        if match.ncc >= 0.999 and match.ncc_edge < 0.25:
+            info["reason"] = "saturated"
+            info["ncc"] = match.ncc
+            info["ncc_edge"] = match.ncc_edge
+            self._log_puzzle_reject(info, digest)
+            return None
         attempt = (
             int(round(origin[0])),
             int(round(origin[1])),
@@ -1408,7 +1808,9 @@ class CdpBrowser:
                 "origin/target; not progress\n"
             )
             return None
-        piece_rect = extracted.get("pieceRect") if isinstance(extracted, dict) else None
+        piece_rect = chosen.get("pieceRect") if isinstance(chosen.get("pieceRect"), dict) else None
+        if piece_rect is None:
+            piece_rect = extracted.get("pieceRect") if isinstance(extracted, dict) else None
         if isinstance(piece_rect, dict):
             try:
                 press = (
@@ -1706,6 +2108,7 @@ class CdpBrowser:
         last_icon_solve: float | None = None
         icon_ready_at = 0.0
         tried_puzzle_drags: set[tuple[int, int, int, int]] = set()
+        puzzle_raster_skip: dict[str, Any] = {}
 
         while loop.time() < max_deadline:
             now = loop.time()
@@ -1740,6 +2143,7 @@ class CdpBrowser:
                     stuck_challenge_since = None
                     procaptcha_executed = False
                     tried_puzzle_drags.clear()
+                    puzzle_raster_skip.clear()
                 last_href = href
 
             on_cf = is_challenge_page(title, href, html)
@@ -1761,6 +2165,7 @@ class CdpBrowser:
                     last_href = ""
                     procaptcha_executed = False
                     tried_puzzle_drags.clear()
+                    puzzle_raster_skip.clear()
                     try:
                         await self.wait_for_event(
                             "Page.loadEventFired",
@@ -1795,6 +2200,8 @@ class CdpBrowser:
             if on_prosopo:
                 state = procaptcha_state(snapshot)
                 kind = str(state.get("kind") or "")
+                if kind != "puzzle":
+                    puzzle_raster_skip.clear()
                 if kind == "puzzle":
                     try:
                         origin_x = float(state.get("originX") or 0)
@@ -1830,12 +2237,17 @@ class CdpBrowser:
                         )
                         if now >= puzzle_ready_at and cooled:
                             dest = await self._solve_procaptcha_puzzle(
-                                session_id, state, tried_puzzle_drags
+                                session_id,
+                                state,
+                                tried_puzzle_drags,
+                                puzzle_raster_skip,
                             )
                             if dest:
                                 last_puzzle_drag = now
                                 last_drag_dest = dest
                                 puzzle_ready_at = now + 4.0
+                            elif puzzle_raster_skip.get("hash"):
+                                last_puzzle_drag = now
                 elif kind == "image":
                     if image_ready_at == 0.0:
                         image_ready_at = now + 0.45
